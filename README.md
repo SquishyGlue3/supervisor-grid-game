@@ -25,3 +25,11 @@ Backend: Node.js, Express
 Communication: WebSockets (ws)
 
 AI Integration: OpenRouter API (connecting to models like Mistral/Llama)
+
+## Setup to Run Locally:
+
+1- "npm install" in console
+
+2- Set OPENROUTER_API_KEY in environment variables.
+
+3- "node server.js" in console
