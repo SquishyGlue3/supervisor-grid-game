@@ -324,6 +324,7 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1
 
   let chatHistory = []; // [{role:'human'|'ai', text, t}]
   let lastAction = 'start', lastSuccess = true, lastPoints = 0, lastReasons = [];
+  let gamePaused = true; // pause until instructions modal is dismissed
 
   let startPos = null;          // {x,y} at episode start
   let timeline = [];            // ordered events: moves + messages
@@ -960,6 +961,7 @@ function buildNarrativeText(){
   let boardInFlight = false;
 
   function sendBoardOnce() {
+    if (gamePaused) return;
     if (ws.readyState !== WebSocket.OPEN) return;
     if (boardTimeout) clearTimeout(boardTimeout);
 
@@ -1006,8 +1008,15 @@ function buildNarrativeText(){
   }
 
 
+  // Expose unpause so the instructions modal can start the game
+  window._unpauseGame = function() {
+    gamePaused = false;
+    if (ws.readyState === WebSocket.OPEN) sendBoardOnce();
+  };
+
   ws.addEventListener('open', () => {
-   setTimeout(() => sendBoardOnce(), 200);
+   // Only send the first board if the game is already unpaused (modal dismissed)
+   if (!gamePaused) setTimeout(() => sendBoardOnce(), 200);
   });
 
   let reconnectDelay = 1000;
@@ -1232,6 +1241,8 @@ function buildNarrativeText(){
     modal.classList.add('hidden');
     setTimeout(() => modal.style.display = 'none', 300);
     helpBtn.style.display = '';
+    // Start the game once the user dismisses the instructions
+    if (window._unpauseGame) window._unpauseGame();
   }
   function openModal(){
     modal.style.display = '';

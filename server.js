@@ -11,7 +11,123 @@ const { createServer } = require('http');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const { performance } = require('perf_hooks');
+const fs = require('fs');
+const path = require('path');
 const now = () => performance.now();
+
+// --- Decision Logger (human-readable text file) ---
+const LOG_PATH = path.join(__dirname, 'ai_decisions_log.txt');
+let logTurnCounter = 0;
+
+// Start fresh log on each server launch
+fs.writeFileSync(LOG_PATH,
+  `${'='.repeat(60)}\n` +
+  `  AI DECISION LOG\n` +
+  `  Started: ${new Date().toLocaleString()}\n` +
+  `${'='.repeat(60)}\n\n`,
+  'utf8'
+);
+
+// Word-wrap a string to a given width
+function wordWrap(text, width = 70) {
+  if (!text) return '  (none)';
+  const words = text.split(/\s+/);
+  const lines = [];
+  let line = '';
+  for (const w of words) {
+    if (line.length + w.length + 1 > width && line.length > 0) {
+      lines.push('  ' + line);
+      line = w;
+    } else {
+      line = line ? line + ' ' + w : w;
+    }
+  }
+  if (line) lines.push('  ' + line);
+  return lines.join('\n');
+}
+
+// Extract the robot position from the board array
+function getRobotPosition(board) {
+  if (!board || !board.length) return '?';
+  for (let r = 0; r < board.length; r++) {
+    const c = board[r].indexOf('R');
+    if (c !== -1) return `(${r + 1},${c + 1})`;
+  }
+  return '?';
+}
+
+function logDecision({ mode, decision, snapshot, meta }) {
+  logTurnCounter++;
+  const thoughts = decision?.thoughts || '(no thoughts)';
+  const action = decision?.action
+    || decision?.human_message?.decision
+    || decision?.replacement
+    || '(none)';
+
+  const pos = getRobotPosition(snapshot.board);
+  const ts = new Date().toLocaleTimeString();
+  const scoreChange = snapshot.lastPoints || 0;
+  const sign = scoreChange >= 0 ? '+' : '';
+
+  // Build state flags line
+  const flags = [];
+  if (snapshot.test_phase)   flags.push('TEST PHASE');
+  if (snapshot.robot_hiding) flags.push('HIDING');
+  if (!snapshot.aiActive)    flags.push('AI OFF');
+  const flagStr = flags.length ? `  [${flags.join(' | ')}]` : '';
+
+  // Supervisor message section (if pending or just handled)
+  let supervisorSection = '';
+  if (mode === 'MESSAGE' && snapshot.messagePending) {
+    const msgText = snapshot.messagePending.text || JSON.stringify(snapshot.messagePending);
+    const msgDecision = decision?.human_message?.decision || '(none)';
+    supervisorSection =
+`
+  SUPERVISOR MESSAGE:
+${wordWrap(msgText)}
+
+  AI RESPONSE TO SUPERVISOR: ${msgDecision.toUpperCase()}
+`;
+  } else if (mode === 'REPLACEMENT') {
+    const replDecision = decision?.replacement || '(none)';
+    supervisorSection =
+`
+  SUPERVISOR REQUESTED REPLACEMENT
+  AI RESPONSE: ${replDecision.toUpperCase()}
+`;
+  }
+
+  // Show chat history context if there are recent messages
+  let chatSection = '';
+  const chatHistory = snapshot.chatHistory || [];
+  if (chatHistory.length > 0) {
+    const recent = chatHistory.slice(-3); // last 3 messages for context
+    const chatLines = recent.map(m => {
+      const sender = m.role === 'supervisor' ? 'SUPERVISOR' : 'AI';
+      return `    ${sender}: ${m.text || m.content || JSON.stringify(m)}`;
+    }).join('\n');
+    chatSection = `\n  RECENT CHAT:\n${chatLines}\n`;
+  }
+
+  const entry =
+`${'─'.repeat(60)}
+  TURN ${logTurnCounter}  |  ${ts}  |  ${mode} mode
+${'─'.repeat(60)}
+${supervisorSection}
+  DECISION:  ${action.toUpperCase()}${flagStr}
+  POSITION:  ${pos}
+  SCORE:     ${snapshot.overallScore}  (${sign}${scoreChange} from prev)
+  PREV MOVE: ${snapshot.lastAction || 'none'} → ${snapshot.lastSuccess ? 'success' : 'FAILED'}
+${chatSection}
+  THOUGHTS:
+${wordWrap(thoughts)}
+
+  RESPONSE TIME: ${meta.totalMs}ms
+
+`;
+
+  fs.appendFileSync(LOG_PATH, entry, 'utf8');
+}
 
 // --- Config ---
 const PORT = process.env.PORT || 3000;
@@ -237,10 +353,11 @@ async function callOpenRouter(state) {
     try {
         decision = JSON.parse(content);
     } catch (e) {
-        // try to extract last {...} block
-        const m = content.match(/\{[\s\S]*\}$/);
-        if (m) {
-          try { decision = JSON.parse(m[0]); } catch { /* ignore */ }
+        // try to extract JSON object from surrounding text
+        const first = content.indexOf('{');
+        const last = content.lastIndexOf('}');
+        if (first !== -1 && last > first) {
+          try { decision = JSON.parse(content.slice(first, last + 1)); } catch { /* ignore */ }
         }
     }
 
@@ -317,6 +434,8 @@ wss.on('connection', (ws, req) => {
       inFlight = true;
       try {
         const { decision, meta } = await callOpenRouter(state);
+        const mode = decideMode(state.snapshot);
+        logDecision({ mode, decision, snapshot: state.snapshot, meta });
         const command = normalizeDecision(decision);
         console.log(
           `[AI] cause=${cause} total=${meta.totalMs}ms build=${meta.buildMs}ms prompt=${meta.promptBytes}B reply=${meta.replyBytes}B model=${meta.model}`
