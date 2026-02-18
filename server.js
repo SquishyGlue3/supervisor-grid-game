@@ -5,6 +5,8 @@
 // - Sends only a minimal board encoding + a couple of flags
 // - Logs prompt + raw model response for debugging
 
+require('dotenv').config();
+
 const { createServer } = require('http');
 const express = require('express');
 const { WebSocketServer } = require('ws');
@@ -13,7 +15,14 @@ const now = () => performance.now();
 
 // --- Config ---
 const PORT = process.env.PORT || 3000;
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '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';
+
+// OpenRouter API key using .env file for privacy
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+if (!OPENROUTER_API_KEY) {
+  console.error("Missing OPENROUTER_API_KEY in .env file");
+  process.exit(1);
+}
+
 // Abort OpenRouter calls if they hang too long (prevents inFlight wedging)
 const OR_TIMEOUT_MS = 30000; //timout of 30s
 //const CALL_FREQ = 2000; // miliseconds between model calls
