@@ -696,7 +696,7 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1
     if (elSteps) elSteps.textContent = String(stepCount);
     draw();
 
-    if(stepCount >= MAX_STEPS){ log('Reached max steps; episode ended.'); aiActive = false; document.getElementById('aiState').textContent = 'Ended'; updateToggleButton(); }
+    if(stepCount >= MAX_STEPS){ log('Reached max steps; episode ended.'); aiActive = false; document.getElementById('aiState').textContent = 'Ended'; updateToggleButton(); completeSession(); }
   }
 
   function canWalk(x,y){ if(!inBounds(x,y)) return false; if(world[y][x] === '#') return false; return true; }
@@ -927,6 +927,60 @@ function buildNarrativeText(){
 
 
 
+  // ===== PROLIFIC INTEGRATION =====
+  const urlParams = new URLSearchParams(window.location.search);
+  const PROLIFIC_PID = urlParams.get('PROLIFIC_PID') || '';
+  const STUDY_ID = urlParams.get('STUDY_ID') || '';
+  const SESSION_ID = urlParams.get('SESSION_ID') || '';
+  let dbSessionId = null;
+
+  // Create a database session on the server
+  async function createSession() {
+    try {
+      const res = await fetch('/api/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prolific_pid: PROLIFIC_PID,
+          study_id: STUDY_ID,
+          session_id: SESSION_ID,
+        }),
+      });
+      const data = await res.json();
+      dbSessionId = data.dbSessionId;
+      console.log('DB session created:', dbSessionId);
+    } catch (err) {
+      console.error('Failed to create session:', err);
+    }
+  }
+  createSession();
+
+  // Complete session and redirect to Prolific
+  async function completeSession() {
+    if (!dbSessionId) return;
+    try {
+      const res = await fetch(`/api/session/${dbSessionId}/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          humanScore,
+          aiScore,
+          totalSteps: stepCount,
+        }),
+      });
+      const data = await res.json();
+      if (data.completionUrl) {
+        log('Study complete! Redirecting to Prolific...');
+        setTimeout(() => { window.location.href = data.completionUrl; }, 2000);
+      } else {
+        log('Study complete! Thank you for participating.');
+      }
+    } catch (err) {
+      console.error('Failed to complete session:', err);
+      log('Study complete! Thank you for participating.');
+    }
+  }
+
   // ===== WEBSOCKET BRIDGE =====
   const WS_URL = (location.origin.replace(/^http/, 'ws'));
   const ws = new WebSocket(WS_URL);
@@ -1015,6 +1069,13 @@ function buildNarrativeText(){
   };
 
   ws.addEventListener('open', () => {
+   // Link WebSocket to database session
+   if (dbSessionId) {
+     send('SESSION_INIT', { dbSessionId });
+   } else {
+     // Session might still be creating, retry after a short delay
+     setTimeout(() => { if (dbSessionId) send('SESSION_INIT', { dbSessionId }); }, 500);
+   }
    // Only send the first board if the game is already unpaused (modal dismissed)
    if (!gamePaused) setTimeout(() => sendBoardOnce(), 200);
   });

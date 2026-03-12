@@ -1,0 +1,22 @@
+databases:
+  - name: gridworld-db
+    plan: free
+    databaseName: gridworld
+    user: gridworld_user
+
+services:
+  - type: web
+    name: supervisor-ai-gridworld
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: gridworld-db
+          property: connectionString
+      - key: OPENROUTER_API_KEY
+        sync: false  # You'll set this manually in Render dashboard
+      - key: PROLIFIC_COMPLETION_URL
+        sync: false  # You'll set this manually in Render dashboard

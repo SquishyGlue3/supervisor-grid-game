@@ -1,8 +1,19 @@
 {
+  "name": "supervisor-ai-gridworld",
+  "version": "1.0.0",
+  "description": "Supervisor-AI Gridworld experiment for Prolific",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "pg": "^8.13.1",
     "ws": "^8.19.0"
   }
 }
