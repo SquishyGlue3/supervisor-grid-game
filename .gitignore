@@ -1,3 +1,10 @@
 node_modules/
 .env
 .DS_Store
+api_key.txt
+ai_decisions_log.txt
+*.pem
+.gitignore
+.claude/settings.local.json
+.gitignore
+https://app.prolific.com/researcher/workspaces/69b2d1b7aae26d4d3622dc85/home

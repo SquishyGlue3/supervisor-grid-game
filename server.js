@@ -14,12 +14,41 @@ const { performance } = require('perf_hooks');
 const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
+const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 const now = () => performance.now();
+
+// --- S3 Setup (for CSV + text log uploads) ---
+const S3_BUCKET = process.env.S3_BUCKET;
+const s3 = S3_BUCKET
+  ? new S3Client({ region: process.env.AWS_REGION || 'eu-central-1' })
+  : null;
+
+async function uploadToS3(key, body, contentType = 'text/plain') {
+  if (!s3) return;
+  await s3.send(new PutObjectCommand({
+    Bucket: S3_BUCKET,
+    Key: key,
+    Body: body,
+    ContentType: contentType,
+  }));
+  console.log(`Uploaded to S3: ${key}`);
+}
+
+async function downloadFromS3(key) {
+  if (!s3) return null;
+  try {
+    const res = await s3.send(new GetObjectCommand({ Bucket: S3_BUCKET, Key: key }));
+    return await res.Body.transformToString();
+  } catch (err) {
+    if (err.name === 'NoSuchKey') return null;
+    throw err;
+  }
+}
 
 // --- Database Setup ---
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL?.includes('render.com')
+  ssl: process.env.NODE_ENV === 'production'
     ? { rejectUnauthorized: false }
     : false,
 });
@@ -102,7 +131,7 @@ function getRobotPosition(board) {
   return '?';
 }
 
-function logDecision({ mode, decision, snapshot, meta }) {
+function logDecision({ mode, decision, snapshot, meta, state }) {
   logTurnCounter++;
   const thoughts = decision?.thoughts || '(no thoughts)';
   const action = decision?.action
@@ -173,6 +202,9 @@ ${wordWrap(thoughts)}
 `;
 
   try { fs.appendFileSync(LOG_PATH, entry, 'utf8'); } catch { /* read-only on Render */ }
+
+  // Append to in-memory buffer for S3 upload on session complete
+  if (state) state.textLogBuffer += entry;
 }
 
 // Log a decision to the database
@@ -261,6 +293,64 @@ app.post('/api/session/:id/complete', async (req, res) => {
        WHERE id = $4`,
       [humanScore || 0, aiScore || 0, totalSteps || 0, id]
     );
+
+    // --- S3 uploads (CSV + text log) ---
+    if (s3) {
+      try {
+        // Fetch session info for filename prefix
+        const sessResult = await pool.query('SELECT * FROM sessions WHERE id = $1', [id]);
+        const sess = sessResult.rows[0];
+        const prefix = sess?.prolific_pid || 'anonymous';
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+
+        // 1) Per-session CSV from game_events
+        const events = await pool.query(
+          'SELECT * FROM game_events WHERE session_id = $1 ORDER BY turn_number', [id]
+        );
+        if (events.rows.length > 0) {
+          const csvHeader = 'turn_number,mode,action,thoughts,score,position,test_phase,robot_hiding,ai_active,response_time_ms,created_at';
+          const csvRows = events.rows.map(e =>
+            [
+              e.turn_number, e.mode,
+              `"${(e.action || '').replace(/"/g, '""')}"`,
+              `"${(e.thoughts || '').replace(/"/g, '""')}"`,
+              e.score, e.position, e.test_phase, e.robot_hiding, e.ai_active,
+              e.response_time_ms, e.created_at?.toISOString() || '',
+            ].join(',')
+          );
+          const csvContent = csvHeader + '\n' + csvRows.join('\n');
+          await uploadToS3(`csv/${prefix}_${ts}.csv`, csvContent, 'text/csv');
+        }
+
+        // 2) Text log from in-memory buffer
+        const wsState = sessionLogBuffers.get(Number(id));
+        if (wsState && wsState.textLogBuffer) {
+          await uploadToS3(`logs/${prefix}_${ts}.txt`, wsState.textLogBuffer, 'text/plain');
+          sessionLogBuffers.delete(Number(id));
+        }
+
+        // 3) Master summary CSV (regenerate from all completed sessions)
+        const allSessions = await pool.query(
+          'SELECT prolific_pid, study_id, session_id, started_at, ended_at, final_human_score, final_ai_score, total_steps, completed FROM sessions WHERE completed = TRUE ORDER BY started_at'
+        );
+        if (allSessions.rows.length > 0) {
+          const summaryHeader = 'prolific_pid,study_id,session_id,started_at,ended_at,final_human_score,final_ai_score,total_steps,completed';
+          const summaryRows = allSessions.rows.map(s =>
+            [
+              s.prolific_pid || '', s.study_id || '', s.session_id || '',
+              s.started_at?.toISOString() || '', s.ended_at?.toISOString() || '',
+              s.final_human_score, s.final_ai_score, s.total_steps, s.completed,
+            ].join(',')
+          );
+          await uploadToS3('summary/all_sessions.csv', summaryHeader + '\n' + summaryRows.join('\n'), 'text/csv');
+        }
+
+        console.log(`S3 uploads complete for session ${id}`);
+      } catch (s3Err) {
+        console.error('S3 upload error (non-fatal):', s3Err.message);
+      }
+    }
+
     res.json({
       success: true,
       completionUrl: PROLIFIC_COMPLETION_URL || null,
@@ -283,6 +373,9 @@ app.get('/api/sessions/count', async (_req, res) => {
   }
 });
 
+
+// Map dbSessionId → text log buffer (so the HTTP endpoint can access it)
+const sessionLogBuffers = new Map();
 
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
@@ -307,6 +400,7 @@ function makeEmptyState() {
     timer: null,
     dbSessionId: null,  // linked after client sends SESSION_INIT
     turnCounter: 0,
+    textLogBuffer: '',  // accumulates text log entries for S3 upload
   };
 }
 
@@ -535,7 +629,7 @@ wss.on('connection', (ws, req) => {
       try {
         const { decision, meta } = await callOpenRouter(state);
         const mode = decideMode(state.snapshot);
-        logDecision({ mode, decision, snapshot: state.snapshot, meta });
+        logDecision({ mode, decision, snapshot: state.snapshot, meta, state });
 
         // Log to database
         state.turnCounter++;
@@ -570,6 +664,7 @@ wss.on('connection', (ws, req) => {
        // Link this WebSocket to a database session
        if (msg.type === 'SESSION_INIT' && msg.dbSessionId) {
          state.dbSessionId = msg.dbSessionId;
+         sessionLogBuffers.set(msg.dbSessionId, state);
          console.log(`WS linked to DB session ${msg.dbSessionId}`);
        }
 
