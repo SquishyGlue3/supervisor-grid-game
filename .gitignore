@@ -1,5 +1,6 @@
 node_modules/
 .env
+rds-ca-bundle.pem
 .DS_Store
 api_key.txt
 ai_decisions_log.txt

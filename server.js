@@ -46,10 +46,11 @@ async function downloadFromS3(key) {
 }
 
 // --- Database Setup ---
+const rdsCAPath = path.join(__dirname, 'rds-ca-bundle.pem');
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production'
-    ? { rejectUnauthorized: true }
+    ? { rejectUnauthorized: true, ca: require('fs').readFileSync(rdsCAPath) }
     : false,
 });
 
