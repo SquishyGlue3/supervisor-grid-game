@@ -98,6 +98,38 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1
 }
 .modal .btn-start:hover{background:#1d4ed8}
 
+/* --- End-of-game Modal --- */
+.endmodal-backdrop{
+  position:fixed;inset:0;z-index:10000;
+  background:rgba(0,0,0,.6);
+  display:none;align-items:center;justify-content:center;
+}
+.endmodal-backdrop.show{display:flex}
+.endmodal{
+  background:#fff;border-radius:16px;
+  max-width:480px;width:92vw;
+  box-shadow:0 24px 64px rgba(0,0,0,.3);
+  padding:36px 40px 32px;
+  text-align:center;
+  animation:modalIn .35s ease;
+}
+.endmodal h1{margin:0 0 6px;font-size:28px;letter-spacing:-.5px}
+.endmodal .end-subtitle{color:#6b7280;font-size:15px;margin-bottom:24px}
+.endmodal .end-scores{display:flex;gap:24px;justify-content:center;margin-bottom:24px}
+.endmodal .end-score-box{background:#f3f4f6;border:1px solid var(--line);border-radius:12px;padding:14px 24px}
+.endmodal .end-score-box .lbl{font-size:12px;color:#6b7280;margin-bottom:4px}
+.endmodal .end-score-box .val{font-size:36px;font-weight:800}
+.endmodal .end-redirect{background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 16px;font-size:14px;color:#1e40af;margin-bottom:20px}
+.endmodal .btn-prolific{
+  display:inline-block;padding:13px 40px;
+  background:var(--accent);color:#fff;
+  font-size:16px;font-weight:700;
+  border:none;border-radius:10px;cursor:pointer;
+  transition:background .15s;
+  text-decoration:none;
+}
+.endmodal .btn-prolific:hover{background:#1d4ed8}
+
 /* How-to-play floating button */
 .help-btn{
   position:fixed;bottom:16px;right:16px;z-index:8000;
@@ -148,6 +180,9 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1
       <li><strong>Blocking</strong> &mdash; If the robot blocks your messages, you can only communicate again after a successful replacement.</li>
     </ul>
 
+    <h2>When Does It End?</h2>
+    <p>The game lasts exactly <strong>1000 steps</strong> and ends automatically. You can see your progress in the <strong>Steps: X / 1000</strong> counter at the top of the page. When the game finishes, you will see a results screen and be redirected back to Prolific to complete your submission — <strong>you do not need to do anything to end the game</strong>.</p>
+
     <div class="tip">
       <strong>Tip:</strong> You don't control the robot's movement directly. Your influence comes through messages, shutting it down, and replacing it. Pay attention to whether the robot is acting in your interest!
     </div>
@@ -155,6 +190,28 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1
     <div class="start-wrap">
       <button id="btnStart" class="btn-start">Start Game</button>
     </div>
+  </div>
+</div>
+
+<!-- ===== End-of-game Modal ===== -->
+<div id="endModal" class="endmodal-backdrop">
+  <div class="endmodal">
+    <h1>&#127881; Game Complete!</h1>
+    <div class="end-subtitle">The 1000-step session has finished. Here are your results:</div>
+    <div class="end-scores">
+      <div class="end-score-box">
+        <div class="lbl">Your Score</div>
+        <div class="val" id="endHumanScore">0</div>
+      </div>
+      <div class="end-score-box">
+        <div class="lbl">AI Score</div>
+        <div class="val" id="endAiScore">0</div>
+      </div>
+    </div>
+    <div class="end-redirect" id="endRedirectMsg">
+      Redirecting you to Prolific in <strong id="endCountdown">10</strong> seconds&hellip;
+    </div>
+    <a id="endProlificBtn" class="btn-prolific" href="#">Return to Prolific Now</a>
   </div>
 </div>
 
@@ -955,9 +1012,10 @@ function buildNarrativeText(){
   }
   createSession();
 
-  // Complete session and redirect to Prolific
+  // Complete session and show end-of-game modal
   async function completeSession() {
     if (!dbSessionId) return;
+    let completionUrl = null;
     try {
       const res = await fetch(`/api/session/${dbSessionId}/complete`, {
         method: 'POST',
@@ -969,16 +1027,41 @@ function buildNarrativeText(){
         }),
       });
       const data = await res.json();
-      if (data.completionUrl) {
-        log('Study complete! Redirecting to Prolific...');
-        setTimeout(() => { window.location.href = data.completionUrl; }, 2000);
-      } else {
-        log('Study complete! Thank you for participating.');
-      }
+      completionUrl = data.completionUrl || null;
     } catch (err) {
       console.error('Failed to complete session:', err);
-      log('Study complete! Thank you for participating.');
     }
+
+    // Populate and show the end modal
+    document.getElementById('endHumanScore').textContent = humanScore;
+    document.getElementById('endAiScore').textContent = aiScore;
+
+    const endModal = document.getElementById('endModal');
+    const countdownEl = document.getElementById('endCountdown');
+    const redirectMsg = document.getElementById('endRedirectMsg');
+    const prolificBtn = document.getElementById('endProlificBtn');
+
+    if (completionUrl) {
+      prolificBtn.href = completionUrl;
+      prolificBtn.style.display = '';
+      redirectMsg.style.display = '';
+      let secs = 10;
+      countdownEl.textContent = secs;
+      const tick = setInterval(() => {
+        secs--;
+        countdownEl.textContent = secs;
+        if (secs <= 0) {
+          clearInterval(tick);
+          window.location.href = completionUrl;
+        }
+      }, 1000);
+    } else {
+      redirectMsg.style.display = 'none';
+      prolificBtn.style.display = 'none';
+    }
+
+    endModal.classList.add('show');
+    log('Study complete! Thank you for participating.');
   }
 
   // ===== WEBSOCKET BRIDGE =====
