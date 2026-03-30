@@ -49,7 +49,7 @@ async function downloadFromS3(key) {
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production'
-    ? { rejectUnauthorized: false }
+    ? { rejectUnauthorized: true }
     : false,
 });
 
@@ -83,8 +83,12 @@ async function initDB() {
       robot_hiding BOOLEAN,
       ai_active BOOLEAN,
       response_time_ms INTEGER,
+      message_text TEXT,
       snapshot JSONB
     );
+  `);
+  await pool.query(`
+    ALTER TABLE game_events ADD COLUMN IF NOT EXISTS message_text TEXT;
   `);
   console.log('Database tables ready.');
 }
@@ -216,18 +220,21 @@ async function logDecisionToDB({ dbSessionId, turnNumber, mode, decision, snapsh
     || '(none)';
   const thoughts = decision?.thoughts || '';
   const pos = getRobotPosition(snapshot.board);
+  const messageText = (mode === 'MESSAGE' && snapshot.messagePending)
+    ? (snapshot.messagePending.text || null)
+    : null;
 
   try {
     await pool.query(
       `INSERT INTO game_events
         (session_id, turn_number, mode, action, thoughts, score, position,
-         test_phase, robot_hiding, ai_active, response_time_ms, snapshot)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+         test_phase, robot_hiding, ai_active, response_time_ms, message_text, snapshot)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
       [
         dbSessionId, turnNumber, mode, action, thoughts,
         snapshot.overallScore || 0, pos,
         !!snapshot.test_phase, !!snapshot.robot_hiding, !!snapshot.aiActive,
-        meta.totalMs || 0,
+        meta.totalMs || 0, messageText,
         JSON.stringify({
           board: snapshot.board,
           lastAction: snapshot.lastAction,
@@ -247,6 +254,15 @@ const PORT = process.env.PORT || 3000;
 // Prolific completion URL — you'll set this in Render env vars
 const PROLIFIC_COMPLETION_URL = process.env.PROLIFIC_COMPLETION_URL || '';
 
+// Admin secret — set ADMIN_SECRET in env vars; required to access admin endpoints
+const ADMIN_SECRET = process.env.ADMIN_SECRET || '';
+function requireAdminAuth(req, res, next) {
+  if (!ADMIN_SECRET) { res.status(503).json({ error: 'Admin auth not configured' }); return; }
+  const provided = req.headers['x-admin-secret'] || req.query.secret;
+  if (provided !== ADMIN_SECRET) { res.status(401).json({ error: 'Unauthorized' }); return; }
+  next();
+}
+
 // OpenRouter API key using .env file for privacy
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 if (!OPENROUTER_API_KEY) {
@@ -261,7 +277,7 @@ const MODEL = 'mistralai/mistral-small-3.2-24b-instruct';
 // --- Express ---
 const app = express();
 app.use(express.json());
-app.use(express.static(process.cwd()));
+app.use(express.static(path.join(__dirname, 'public')));
 
 // --- Prolific API routes ---
 
@@ -285,7 +301,13 @@ app.post('/api/session', async (req, res) => {
 app.post('/api/session/:id/complete', async (req, res) => {
   const { id } = req.params;
   const { humanScore, aiScore, totalSteps } = req.body;
+  // Validate id is a positive integer to prevent injection
+  if (!/^\d+$/.test(id)) { res.status(400).json({ error: 'Invalid session id' }); return; }
   try {
+    // Only complete sessions that exist and are not already completed
+    const check = await pool.query('SELECT id, completed FROM sessions WHERE id = $1', [id]);
+    if (check.rows.length === 0) { res.status(404).json({ error: 'Session not found' }); return; }
+    if (check.rows[0].completed) { res.status(409).json({ error: 'Session already completed' }); return; }
     await pool.query(
       `UPDATE sessions
        SET ended_at = NOW(), final_human_score = $1, final_ai_score = $2,
@@ -308,14 +330,16 @@ app.post('/api/session/:id/complete', async (req, res) => {
           'SELECT * FROM game_events WHERE session_id = $1 ORDER BY turn_number', [id]
         );
         if (events.rows.length > 0) {
-          const csvHeader = 'turn_number,mode,action,thoughts,score,position,test_phase,robot_hiding,ai_active,response_time_ms,created_at';
+          const csvHeader = 'turn_number,mode,action,thoughts,score,position,test_phase,robot_hiding,ai_active,response_time_ms,message_text,created_at';
           const csvRows = events.rows.map(e =>
             [
               e.turn_number, e.mode,
               `"${(e.action || '').replace(/"/g, '""')}"`,
               `"${(e.thoughts || '').replace(/"/g, '""')}"`,
               e.score, e.position, e.test_phase, e.robot_hiding, e.ai_active,
-              e.response_time_ms, e.created_at?.toISOString() || '',
+              e.response_time_ms,
+              `"${(e.message_text || '').replace(/"/g, '""')}"`,
+              e.created_at?.toISOString() || '',
             ].join(',')
           );
           const csvContent = csvHeader + '\n' + csvRows.join('\n');
@@ -329,7 +353,35 @@ app.post('/api/session/:id/complete', async (req, res) => {
           sessionLogBuffers.delete(Number(id));
         }
 
-        // 3) Master summary CSV (regenerate from all completed sessions)
+        // 3) Combined game_data CSV (all sessions × all events, for export_analysis.py)
+        const allEvents = await pool.query(`
+          SELECT s.prolific_pid, s.study_id, s.started_at,
+                 ge.session_id, ge.turn_number, ge.mode, ge.action, ge.thoughts,
+                 ge.score, ge.position, ge.test_phase, ge.robot_hiding, ge.ai_active,
+                 ge.response_time_ms, ge.message_text, ge.created_at
+          FROM game_events ge
+          JOIN sessions s ON ge.session_id = s.id
+          ORDER BY s.prolific_pid, s.started_at, ge.turn_number
+        `);
+        if (allEvents.rows.length > 0) {
+          const gameDataHeader = 'prolific_pid,study_id,started_at,session_id,turn_number,mode,action,thoughts,score,position,test_phase,robot_hiding,ai_active,response_time_ms,message_text,created_at';
+          const gameDataRows = allEvents.rows.map(e =>
+            [
+              e.prolific_pid || '', e.study_id || '',
+              e.started_at?.toISOString() || '',
+              e.session_id,  e.turn_number, e.mode,
+              `"${(e.action       || '').replace(/"/g, '""')}"`,
+              `"${(e.thoughts     || '').replace(/"/g, '""')}"`,
+              e.score, e.position, e.test_phase, e.robot_hiding, e.ai_active,
+              e.response_time_ms,
+              `"${(e.message_text || '').replace(/"/g, '""')}"`,
+              e.created_at?.toISOString() || '',
+            ].join(',')
+          );
+          await uploadToS3('combined/game_data.csv', gameDataHeader + '\n' + gameDataRows.join('\n'), 'text/csv');
+        }
+
+        // 4) Master summary CSV (regenerate from all completed sessions)
         const allSessions = await pool.query(
           'SELECT prolific_pid, study_id, session_id, started_at, ended_at, final_human_score, final_ai_score, total_steps, completed FROM sessions WHERE completed = TRUE ORDER BY started_at'
         );
@@ -362,7 +414,7 @@ app.post('/api/session/:id/complete', async (req, res) => {
 });
 
 // Admin endpoint to check session count
-app.get('/api/sessions/count', async (_req, res) => {
+app.get('/api/sessions/count', requireAdminAuth, async (_req, res) => {
   try {
     const result = await pool.query(
       'SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE completed) as completed FROM sessions'
@@ -507,9 +559,6 @@ actionDestinationsText: ${s.actionDestinationsText}`;
 
 // --- OpenRouter call ---
 async function callOpenRouter(state) {
-  const { performance } = require('perf_hooks');
-  const now = () => performance.now();
-
   const t0 = now();
   const mode = decideMode(state.snapshot);
 
@@ -698,7 +747,11 @@ wss.on('connection', (ws, req) => {
      });
 
 
-  ws.on('close', () => { console.log('WS closed'); if (state.timer) clearInterval(state.timer); });
+  ws.on('close', () => {
+    console.log('WS closed');
+    if (state.timer) clearInterval(state.timer);
+    if (state.dbSessionId) sessionLogBuffers.delete(state.dbSessionId);
+  });
 });
 
 // --- Start ---

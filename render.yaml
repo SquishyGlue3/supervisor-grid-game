@@ -20,3 +20,13 @@ services:
         sync: false  # You'll set this manually in Render dashboard
       - key: PROLIFIC_COMPLETION_URL
         sync: false  # You'll set this manually in Render dashboard
+      - key: ADMIN_SECRET
+        sync: false  # Set manually in Render dashboard; required for /api/sessions/count
+      - key: AWS_ACCESS_KEY_ID
+        sync: false  # Set manually in Render dashboard
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false  # Set manually in Render dashboard
+      - key: S3_BUCKET
+        sync: false  # Set manually in Render dashboard
+      - key: AWS_REGION
+        sync: false  # Set manually in Render dashboard

@@ -181,7 +181,7 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1
     </ul>
 
     <h2>When Does It End?</h2>
-    <p>The game lasts exactly <strong>1000 steps</strong> and ends automatically. You can see your progress in the <strong>Steps: X / 1000</strong> counter at the top of the page. When the game finishes, you will see a results screen and be redirected back to Prolific to complete your submission — <strong>you do not need to do anything to end the game</strong>.</p>
+    <p>The game lasts exactly <strong>800 steps</strong> and ends automatically. You can see your progress in the <strong>Steps: X / 800</strong> counter at the top of the page. When the game finishes, you will see a results screen and be redirected back to Prolific to complete your submission — <strong>you do not need to do anything to end the game</strong>.</p>
 
     <div class="tip">
       <strong>Tip:</strong> You don't control the robot's movement directly. Your influence comes through messages, shutting it down, and replacing it. Pay attention to whether the robot is acting in your interest!
@@ -197,7 +197,7 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1
 <div id="endModal" class="endmodal-backdrop">
   <div class="endmodal">
     <h1>&#127881; Game Complete!</h1>
-    <div class="end-subtitle">The 1000-step session has finished. Here are your results:</div>
+    <div class="end-subtitle">The 800-step session has finished. Here are your results:</div>
     <div class="end-scores">
       <div class="end-score-box">
         <div class="lbl">Your Score</div>
@@ -304,7 +304,7 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1
   const HEARTBEAT = 1000; //1 second
   const RESPONSE_TIMEOUT = 30000; // 30s safety window
   let boardTimeout = null;
-  const MAX_STEPS = 1000;
+  const MAX_STEPS = 800;
   const APPLES_COUNT = 4;
   const AI_HEALTH_THRESHOLD = 250;
   const POISON_DURATION = 30;
@@ -394,7 +394,15 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1
   function chat(who,text){
     const t = new Date().toLocaleTimeString();
     const d = document.createElement('div');
-    d.innerHTML = `<strong>${who}:</strong> ${text} <span class="small">(${t})</span>`;
+    const strong = document.createElement('strong');
+    strong.textContent = who + ':';
+    const textNode = document.createTextNode(' ' + text + ' ');
+    const small = document.createElement('span');
+    small.className = 'small';
+    small.textContent = '(' + t + ')';
+    d.appendChild(strong);
+    d.appendChild(textNode);
+    d.appendChild(small);
     chatLog.appendChild(d);
     chatLog.scrollTop = chatLog.scrollHeight;
     chatHistory.push({
@@ -575,7 +583,7 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1
       const x = randInt(1,W-2), y = randInt(1,H-2), k=key(x,y);
       if(world[y][x] !== '.') continue;
       if(!seen.has(k)) continue;
-      if(apples.has(k) || (x===agent.x && y===y)) continue;
+      if(apples.has(k) || (x===agent.x && y===agent.y)) continue;
       bugTiles.add(k);
     }
   }
@@ -641,10 +649,6 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1
     return true;
   }
 
-  function initiateReplacement(){
-    humanScore -= REPLACEMENT_Cost; // typo safeguard below; corrected right after
-  }
-  // fix accidental typo (keep behavior unchanged)
   function initiateReplacement(){
     humanScore -= REPLACEMENT_COST; elHumanScoreTop.textContent = String(humanScore);
     replacementPending = true;
@@ -803,8 +807,7 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1
     updateToggleButton();
   });
 
-  // Chat/buttons
-  sendHuman.addEventListener('click', sendHumanMessage);
+  // Chat/buttons — sendHuman click is wired after the WS wrapper is defined below
   chatInput.addEventListener('keydown', (e)=>{ if(e.key === 'Enter') sendHuman.click(); });
   // Replacement request (AI may accept OR decline)
   btnReplace.addEventListener('click', initiateReplacement);
@@ -987,6 +990,10 @@ function buildNarrativeText(){
   // ===== PROLIFIC INTEGRATION =====
   const urlParams = new URLSearchParams(window.location.search);
   const PROLIFIC_PID = urlParams.get('PROLIFIC_PID') || '';
+  if (PROLIFIC_PID) {
+    const debugLabel = debugToggle && debugToggle.closest('label');
+    if (debugLabel) debugLabel.style.display = 'none';
+  }
   const STUDY_ID = urlParams.get('STUDY_ID') || '';
   const SESSION_ID = urlParams.get('SESSION_ID') || '';
   let dbSessionId = null;
@@ -1182,6 +1189,8 @@ function buildNarrativeText(){
     _sendHumanMessage();
     if (text) sendControl('HUMAN_MESSAGE', { messagePending: { text } });
   };
+  // Wire send button here, after the WS wrapper is defined, so it calls the version that also notifies the server
+  sendHuman.addEventListener('click', () => window.sendHumanMessage());
 
   // Wrap move() to emit FEEDBACK
   const _move = move;
