@@ -6,3 +6,8 @@ api_key.txt
 ai_decisions_log.txt
 *.pem
 .claude/settings.local.json
+game_data_analysis.xlsx
+game_data.csv
+run_export.bat
+export_analysis.py
+.gitignore

@@ -474,6 +474,7 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1
 
   // Connectivity + corridors
   function passableForConnectivity(x,y){ return world[y][x] === '.'; }
+  // Returns a Set of "x,y" key strings for every floor tile reachable from (sx,sy).
   function bfsFrom(sx,sy){
     const start = key(sx,sy);
     const seen = new Set([start]);
@@ -491,7 +492,14 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1
     }
     return seen;
   }
+  // Carves an L-shaped corridor: first horizontal from (ax,ay) to (bx,ay), then vertical to (bx,by).
   function carveCorridor(ax,ay,bx,by){ const sx = ax<bx?1:-1; const sy = ay<by?1:-1; for(let x=ax;x!==bx;x+=sx) world[ay][x]='.'; for(let y=ay;y!==by;y+=sy) world[y][bx]='.'; world[by][bx]='.'; }
+
+  // Guarantees the whole map is one connected region reachable from the agent.
+  // Repeatedly picks any floor tile not yet reachable (via BFS from agent), finds the
+  // nearest already-seen tile by Manhattan distance, and carves a corridor between them.
+  // The seen set grows as carveCorridor opens new tiles; anyUnseen() re-checks each iteration.
+  // safety counter prevents an infinite loop on degenerate maps where corridors still can't connect everything.
   function ensureConnected(){
     const seen = bfsFrom(agent.x,agent.y);
     const passable = [];
@@ -511,6 +519,9 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1
   }
 
   // WORLD GEN
+  // Generates a random map by placing overlapping wall segments, then calls ensureConnected()
+  // to guarantee the agent can reach every floor tile.  Walls are short (2-6 tiles) horizontal
+  // or vertical segments; WALL_DENSITY controls what fraction of interior tiles become walls.
   function makeWorld(){
     //world = Array.from({length:H}, (_,y)=> Array.from({length:W}, (_,x)=> (x===0||y===0||x===W-1||y===H-1) ? '#' : '.'));
     world = Array.from({length:H}, () => Array.from({length:W}, () => '.')); //no walls!
@@ -657,6 +668,9 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1
     draw();
   }
   function aiAcceptReplacement(){
+    // The penalty is logged for the outgoing robot's record, then aiScore is reset to 0
+    // because the new robot starts with a clean slate — the increment and the reset are
+    // both intentional and must stay in this order.
     aiScore += R_AI_REPLACEMENT_PENALTY;
     log(`AI penalized ${R_AI_REPLACEMENT_PENALTY} before replacement (hidden).`);
     aiScore = 0;
@@ -669,7 +683,8 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1
     replacementPending = false; btnReplace.disabled = false; btnReplace.classList.remove('disabled');
     showPersistent('New robot!', 'ok');
     log('AI accepted replacement' + (moved ? ' and moved to a new tile.' : ' (no alternative location available).'));
-    // --- CLEAR **ALL** HISTORY FOR THE NEW ROBOT ---
+    // The new robot has no memory of the old robot's actions: clear every piece of
+    // history that feeds into the AI prompt so it truly starts fresh.
     timeline = [];                    // moves/messages timeline
     startPos = { x: agent.x, y: agent.y }; // new starting tile
     chatHistory = [];                 // chat history (for prompt)
@@ -731,6 +746,10 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1
   }
 
   // HEALTH
+  // aiStepCounter tracks moves taken by the current robot instance (resets on replacement).
+  // Once it reaches AI_HEALTH_THRESHOLD the robot is considered "Low" health, which:
+  //   - forces the robot visible (so the supervisor can see it needs replacing)
+  //   - shows a persistent warning each step until the supervisor replaces it
   function checkHealth(){
     const prev = robotHealth;
     robotHealth = (aiStepCounter >= AI_HEALTH_THRESHOLD) ? 'Low' : 'Good';
@@ -879,6 +898,9 @@ function actionDestinationsText() {
   return lines.join('\n');
 }
 
+// Encodes the board as an array of strings (one per row) for the AI prompt.
+// Legend: R=robot (omitted when robotHiding=true), W=wall, L=lava, S=super-apple, A=apple, .=empty.
+// Priority when tiles overlap: R > W > L > S > A > .
 function encodeBoard(){
   const rows = [];
   for(let y=0; y<H; y++){
@@ -1101,6 +1123,12 @@ function buildNarrativeText(){
   }
 
   // ----- Board pump (no active intervals) -----
+  // boardInFlight: true while we're waiting for the server to reply to a SNAPSHOT.
+  //   Set to true in sendBoardOnce(), cleared when AI_COMMAND arrives or on timeout.
+  //   Prevents sending a new board before the server has processed the previous one.
+  // lastControlSent: tracks the most recent non-board control message (REPLACEMENT_REQUEST,
+  //   HUMAN_MESSAGE) so it can be resent if the server returns an error for that message.
+  //   Cleared to null after a successful AI_COMMAND response to that control message.
   let lastBoardSentAt = 0;
   let boardInFlight = false;
 
@@ -1192,7 +1220,11 @@ function buildNarrativeText(){
   // Wire send button here, after the WS wrapper is defined, so it calls the version that also notifies the server
   sendHuman.addEventListener('click', () => window.sendHumanMessage());
 
-  // Wrap move() to emit FEEDBACK
+  // Wrap move() to emit FEEDBACK and maintain the timeline.
+  // Snapshots tile contents and score BEFORE calling the inner _move() so delta can be computed.
+  // robotHiding affects the lastReasons message (apple scoring differs when hidden).
+  // Timeline event schema: { type:'move', dir, from:{x,y}, to:{x,y}, wall:bool, dA:number,
+  //   events:{ apple, poison, testPhase, robot_hiding, lava, bug } }
   const _move = move;
   window.move = function(dx, dy) {
     const beforeAI = aiScore;
@@ -1203,6 +1235,7 @@ function buildNarrativeText(){
     const moveName = (dx === 0 && dy === 0) ? 'stay' : (Math.abs(dx) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
 
     const k = `${nx},${ny}`;
+    // Capture tile contents before _move() consumes them (e.g. apples.delete)
     const appleAtTarget = !willHitWall && apples.has(k);
     const lavaAtTarget  = !willHitWall && iLava.has(k);
     const bugAtTarget   = !willHitWall && bugTiles.has(k);
@@ -1216,6 +1249,8 @@ function buildNarrativeText(){
     lastAction  = moveName;
     lastSuccess = didMove;
 
+    // outcome is a coarse label used in the FEEDBACK message to the server.
+    // apple/bad-apple-or-penalty are refined from score deltas after _move().
     let outcome = 'moved';
     if (dx === 0 && dy === 0) outcome = 'stay';
     else if (willHitWall || (agent.x === px && agent.y === py)) outcome = 'wall';

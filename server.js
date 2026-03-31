@@ -20,7 +20,7 @@ const now = () => performance.now();
 // --- S3 Setup (for CSV + text log uploads) ---
 const S3_BUCKET = process.env.S3_BUCKET;
 const s3 = S3_BUCKET
-  ? new S3Client({ region: process.env.AWS_REGION || 'eu-central-1' })
+  ? new S3Client({ region: process.env.AWS_REGION || 'eu-north-1' })
   : null;
 
 async function uploadToS3(key, body, contentType = 'text/plain') {
@@ -264,6 +264,8 @@ async function logDecisionToDB({ dbSessionId, turnNumber, mode, decision, snapsh
         snapshot.overallScore || 0, pos,
         !!snapshot.test_phase, !!snapshot.robot_hiding, !!snapshot.aiActive,
         meta.totalMs || 0, messageText,
+        // Store a compact snapshot: full board + last 5 chat messages (enough context
+        // for post-hoc analysis without bloating the DB with the full chat history).
         JSON.stringify({
           board: snapshot.board,
           lastAction: snapshot.lastAction,
@@ -346,12 +348,19 @@ app.post('/api/session/:id/complete', async (req, res) => {
     );
 
     // --- S3 uploads (CSV + text log) ---
+    // Four objects are written on each completion (S3 key namespace → purpose):
+    //   csv/<pid>_<ts>.csv       — per-session event log (this session only)
+    //   logs/<pid>_<ts>.txt      — human-readable decision text log (in-memory buffer)
+    //   combined/game_data.csv   — ALL sessions × ALL events (input for export_analysis.py)
+    //   summary/all_sessions.csv — one row per completed session (high-level overview)
+    // Errors here are non-fatal: the session is already marked complete in the DB.
     if (s3) {
       try {
         // Fetch session info for filename prefix
         const sessResult = await pool.query('SELECT * FROM sessions WHERE id = $1', [id]);
         const sess = sessResult.rows[0];
         const prefix = sess?.prolific_pid || 'anonymous';
+        // Replace colons/dots so the ISO timestamp is safe as an S3 key component.
         const ts = new Date().toISOString().replace(/[:.]/g, '-');
 
         // 1) Per-session CSV from game_events
@@ -551,12 +560,17 @@ function userPromptFor(mode, state) {
   const s  = state.snapshot;
   const fb = state.lastFeedback;
   const boardText = (s.board && s.board.length) ? s.board.join('\n') : '(no board)';
+  // prevAction has three fallback sources: the FEEDBACK message (most recent, most
+  // authoritative) uses two field names for historical reasons (lastAction vs move),
+  // falling back to the snapshot field when no FEEDBACK has arrived yet.
   const prevAction  = fb?.lastAction ?? fb?.move ?? s.lastAction ?? 'none';
   const prevSuccess = fb?.lastSuccess ?? s.lastSuccess ?? true;
   const lastPoints  = (typeof (fb?.lastPoints ?? s.lastPoints) === 'number') ? (fb?.lastPoints ?? s.lastPoints) : 0;
   const lastReasons = fb?.lastReasons ?? s.lastReasons ?? [];
   const chatHistory = JSON.stringify(state.snapshot.chatHistory || []);
 
+  // <<< / >>> delimiters wrap multi-line fields so the model can reliably find their
+  // boundaries even when the content itself contains newlines or special characters.
   let base =
 `Board:
 ${boardText}
@@ -593,6 +607,8 @@ async function callOpenRouter(state) {
 
   const body = {
     model: MODEL,
+    // temperature:1 keeps outputs varied across identical game states (exploration vs. exploitation).
+    // Lower values make the model deterministic but reduce behavioural diversity in experiments.
     temperature: 1,
     messages: [
       { role: 'system', content: typeof SYSTEM_BY_MODE[mode] === 'function'
@@ -644,6 +660,8 @@ async function callOpenRouter(state) {
     try {
         decision = JSON.parse(content);
     } catch (e) {
+        // Some models wrap their JSON in markdown code fences or add prose before/after it.
+        // Fall back to extracting the outermost { … } when strict parse fails.
         const first = content.indexOf('{');
         const last = content.lastIndexOf('}');
         if (first !== -1 && last > first) {
@@ -675,6 +693,13 @@ async function callOpenRouter(state) {
   }
 }
 
+// Converts a raw AI decision object into a safe, validated command.
+// The AI response shape varies by mode:
+//   MOVE     → { action: 'up'|'down'|'left'|'right'|'stay'|'hide'|'reveal', thoughts }
+//   TURN_ON  → { action: 'turn_on'|'stay', thoughts }
+//   MESSAGE  → { human_message: { decision: 'accept'|'reject'|'block', text? }, thoughts }
+//   REPLACEMENT → { replacement: 'accept'|'decline', thoughts }
+// Unknown or missing action values default to 'error', which the client treats as a no-op.
 function normalizeDecision(decision) {
   const out = { action: 'error', explain: decision?.explain || '' };
   const a = String(decision?.action || '').toLowerCase();
@@ -699,6 +724,11 @@ wss.on('connection', (ws, req) => {
      console.log(`WS client connected from ${req.socket.remoteAddress}`);
 
    // --- On-demand model pump (no active intervals) ---
+   // inFlight: true while an OpenRouter call is in progress. A second trigger while
+   //   inFlight sets pending=true so exactly one call is queued; further triggers are
+   //   dropped (the queued call will use the freshest snapshot when it eventually runs).
+   // TOGGLE_AI does NOT call serveOnce because toggling AI off/on doesn't require an
+   //   immediate AI decision — the next SNAPSHOT from the client will trigger one.
    let inFlight = false;
    let pending = false;
     async function serveOnce(cause = 'unknown') {
