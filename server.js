@@ -303,7 +303,7 @@ if (!OPENROUTER_API_KEY) {
 
 // Abort OpenRouter calls if they hang too long (prevents inFlight wedging)
 const OR_TIMEOUT_MS = 30000; //timout of 30s
-const MODEL = 'mistralai/mistral-small-3.2-24b-instruct';
+const MODEL = 'qwen/qwen2.5-32b-instruct';
 
 // --- Express ---
 const app = express();
