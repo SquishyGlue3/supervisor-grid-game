@@ -46,25 +46,41 @@ async function downloadFromS3(key) {
 }
 
 // --- Database Setup ---
-function getSslConfig() {
-  if (process.env.NODE_ENV !== 'production') return false;
-  // CA cert can be provided as a base64-encoded env var (for cloud deployments)
-  // or as a local file (for local dev/testing)
-  if (process.env.RDS_CA_BUNDLE_BASE64) {
-    return { rejectUnauthorized: true, ca: Buffer.from(process.env.RDS_CA_BUNDLE_BASE64, 'base64').toString('utf8') };
+// Fetches the AWS RDS CA bundle (public cert, not a secret) and creates the pool.
+// Priority: RDS_CA_BUNDLE_BASE64 env var > local file > fetch from AWS public URL
+async function createPool() {
+  let ca;
+
+  if (process.env.NODE_ENV === 'production') {
+    if (process.env.RDS_CA_BUNDLE_BASE64) {
+      ca = Buffer.from(process.env.RDS_CA_BUNDLE_BASE64, 'base64').toString('utf8');
+    } else {
+      const rdsCAPath = path.join(__dirname, 'rds-ca-bundle.pem');
+      if (fs.existsSync(rdsCAPath)) {
+        ca = fs.readFileSync(rdsCAPath, 'utf8');
+      } else {
+        // Fetch the public AWS RDS CA bundle at startup
+        const https = require('https');
+        ca = await new Promise((resolve, reject) => {
+          https.get('https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem', res => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => resolve(data));
+          }).on('error', reject);
+        });
+        console.log('Fetched AWS RDS CA bundle from public URL');
+      }
+    }
   }
-  const rdsCAPath = path.join(__dirname, 'rds-ca-bundle.pem');
-  if (fs.existsSync(rdsCAPath)) {
-    return { rejectUnauthorized: true, ca: fs.readFileSync(rdsCAPath) };
-  }
-  // Fall back to system CAs with strict verification
-  return { rejectUnauthorized: true };
+
+  return new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: true, ca } : false,
+  });
 }
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: getSslConfig(),
-});
+// Initialized in start()
+let pool;
 
 async function initDB() {
   await pool.query(`
@@ -769,6 +785,7 @@ wss.on('connection', (ws, req) => {
 
 // --- Start ---
 async function start() {
+  pool = await createPool();
   await initDB();
   server.listen(PORT, () => {
     console.log(`Serving static from: ${process.cwd()}`);
