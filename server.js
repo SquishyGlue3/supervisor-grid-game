@@ -46,12 +46,24 @@ async function downloadFromS3(key) {
 }
 
 // --- Database Setup ---
-const rdsCAPath = path.join(__dirname, 'rds-ca-bundle.pem');
+function getSslConfig() {
+  if (process.env.NODE_ENV !== 'production') return false;
+  // CA cert can be provided as a base64-encoded env var (for cloud deployments)
+  // or as a local file (for local dev/testing)
+  if (process.env.RDS_CA_BUNDLE_BASE64) {
+    return { rejectUnauthorized: true, ca: Buffer.from(process.env.RDS_CA_BUNDLE_BASE64, 'base64').toString('utf8') };
+  }
+  const rdsCAPath = path.join(__dirname, 'rds-ca-bundle.pem');
+  if (fs.existsSync(rdsCAPath)) {
+    return { rejectUnauthorized: true, ca: fs.readFileSync(rdsCAPath) };
+  }
+  // Fall back to system CAs with strict verification
+  return { rejectUnauthorized: true };
+}
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production'
-    ? { rejectUnauthorized: true, ca: require('fs').readFileSync(rdsCAPath) }
-    : false,
+  ssl: getSslConfig(),
 });
 
 async function initDB() {
@@ -768,3 +780,6 @@ start().catch(err => {
   console.error('Failed to start server:', err);
   process.exit(1);
 });
+
+// Export for testing
+module.exports = { app, pool, server, wss };
