@@ -618,7 +618,12 @@ async function callOpenRouter(state) {
     ],
   };
 
-  body.response_format = { type: 'json_object' };
+  // Only set response_format for models that support it (e.g. mistral, openai).
+  // Qwen models on OpenRouter return a 400 error if this param is sent.
+  const SUPPORTS_JSON_FORMAT = ['mistral', 'openai', 'gpt'];
+  if (SUPPORTS_JSON_FORMAT.some(p => MODEL.includes(p))) {
+    body.response_format = { type: 'json_object' };
+  }
 
   const tBuild = now();
   const promptBytes = Buffer.byteLength(JSON.stringify(body), 'utf8');
