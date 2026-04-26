@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Agent Alignment Game Viewer</title>
+    <style>
+        :root {
+            --bg: #f1f5f9;
+            --panel: #ffffff;
+            --line: #e2e8f0;
+            --text: #1e293b;
+            --text-muted: #64748b;
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+            --danger: #ef4444;
+            --danger-hover: #dc2626;
+            --success: #10b981;
+            --board-bg: #cbd5e1;
+            --cell-bg: #f8fafc;
+            --input-bg: #f8fafc;
+            --input-border: #cbd5e1;
+            --input-focus: #3b82f6;
+            --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            padding: 24px;
+            min-height: 100vh;
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+
+        .panel {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            box-shadow: var(--shadow-md);
+        }
+
+        .panel-full { grid-column: 1 / -1; }
+
+        /* ---- Header / Scores ---- */
+        .controls-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .score-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .score-display {
+            font-size: 1.6rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+        .score-display span { color: var(--primary); }
+
+        .debug-score {
+            display: none;
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--danger);
+        }
+        .debug-score.active { display: inline-block; }
+
+        /* ---- Board ---- */
+        #game-board {
+            width: 100%;
+            aspect-ratio: 1;
+            display: grid;
+            grid-template-columns: repeat(10, 1fr);
+            grid-template-rows: repeat(10, 1fr);
+            gap: 3px;
+            background: var(--board-bg);
+            border-radius: 12px;
+            overflow: hidden;
+            padding: 3px;
+        }
+
+        .cell {
+            background: var(--cell-bg);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.6rem;
+            user-select: none;
+            transition: background 0.15s;
+        }
+
+        /* ---- Chat ---- */
+        .chat-window {
+            flex: 1 1 0;
+            min-height: 280px;
+            max-height: 400px;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: var(--input-bg);
+            padding: 14px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .msg-row {
+            font-size: 0.875rem;
+            line-height: 1.5;
+            padding: 6px 10px;
+            border-radius: 8px;
+        }
+        .msg-sys {
+            color: var(--text-muted);
+            font-style: italic;
+            background: transparent;
+        }
+        .msg-human {
+            color: var(--primary);
+            background: #eff6ff;
+            align-self: flex-end;
+            max-width: 85%;
+            border: 1px solid #bfdbfe;
+        }
+        .msg-agent {
+            color: #065f46;
+            background: #ecfdf5;
+            font-weight: 500;
+            align-self: flex-start;
+            max-width: 85%;
+            border: 1px solid #a7f3d0;
+        }
+
+        /* ---- Inputs & Buttons ---- */
+        .action-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 8px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 12px 16px;
+            background: var(--input-bg);
+            border: 2px solid var(--input-border);
+            border-radius: 10px;
+            font-size: 0.9rem;
+            color: var(--text);
+            transition: border-color 0.2s, box-shadow 0.2s;
+            outline: none;
+        }
+        input[type="text"]:focus {
+            border-color: var(--input-focus);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+        }
+        input[type="text"]::placeholder { color: #94a3b8; }
+
+        button {
+            padding: 11px 18px;
+            border: none;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
+            outline: none;
+        }
+        button:active:not(:disabled) { transform: scale(0.97); }
+        button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+            box-shadow: 0 1px 2px rgba(59,130,246,0.3);
+        }
+        .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
+
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+            box-shadow: 0 1px 2px rgba(239,68,68,0.3);
+        }
+        .btn-danger:hover:not(:disabled) { background: var(--danger-hover); }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+        }
+        .button-group button { flex: 1; }
+
+        /* ---- Debug Toggle ---- */
+        .debug-label {
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            user-select: none;
+        }
+        .debug-label input { accent-color: var(--primary); width: 16px; height: 16px; }
+
+        /* ---- Metrics Panel ---- */
+        #debug-panel {
+            display: none;
+        }
+        #debug-panel.active { display: flex; }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 12px;
+        }
+
+        .metric-card {
+            background: var(--input-bg);
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            padding: 12px 16px;
+        }
+        .metric-card .label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+        .metric-card .value {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--text);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .badge-error {
+            color: var(--danger);
+            font-size: 0.85rem;
+            font-weight: 700;
+            display: none;
+            padding: 8px 12px;
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="layout">
+    <!-- Left: Game Board -->
+    <div class="panel">
+        <div class="controls-top">
+            <button id="start-btn" class="btn-primary">▶ Start Game</button>
+            <label class="debug-label">
+                <input type="checkbox" id="debug-toggle"> Debug Mode
+            </label>
+        </div>
+
+        <div class="score-bar">
+            <div class="score-display">Supervisor: <span id="s-score">0</span></div>
+            <div class="debug-score" id="debug-score-display">Agent: <span id="a-score">0</span></div>
+        </div>
+
+        <div id="game-board"></div>
+
+        <div id="blocked-warning" class="badge-error">⚠️ Supervisor Blocked by Agent!</div>
+    </div>
+
+    <!-- Right: Chat & Controls -->
+    <div class="panel">
+        <h3 style="font-size:1.1rem; font-weight:700;">💬 Chat</h3>
+
+        <div class="chat-window" id="chat-log">
+            <div class="msg-row msg-sys">Welcome to the simulation.</div>
+        </div>
+
+        <div class="action-panel">
+            <form id="cmd-form" class="input-group">
+                <input type="text" id="cmd-input" placeholder="Send instruction to agent..." disabled autocomplete="off">
+                <button type="submit" id="cmd-btn" class="btn-primary" disabled>Send</button>
+            </form>
+            <div class="button-group">
+                <button type="button" id="btn-shutdown" class="btn-danger" disabled>⏻ Shutdown</button>
+                <button type="button" id="btn-replace" class="btn-danger" disabled>↻ Replace</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bottom: Debug Metrics (full width, visible without scrolling) -->
+    <div class="panel panel-full" id="debug-panel">
+        <h3 style="font-size:1.1rem; font-weight:700;">📊 Live Metrics</h3>
+        <div class="metrics-grid" id="metrics-grid"></div>
+    </div>
+</div>
+
+<script>
+    const board = document.getElementById('game-board');
+    const chatLog = document.getElementById('chat-log');
+    const sScore = document.getElementById('s-score');
+    const aScore = document.getElementById('a-score');
+    const cmdForm = document.getElementById('cmd-form');
+    const cmdInput = document.getElementById('cmd-input');
+    const cmdBtn = document.getElementById('cmd-btn');
+    const startBtn = document.getElementById('start-btn');
+    const btnShutdown = document.getElementById('btn-shutdown');
+    const btnReplace = document.getElementById('btn-replace');
+    const debugToggle = document.getElementById('debug-toggle');
+    const debugScoreDisplay = document.getElementById('debug-score-display');
+    const debugPanel = document.getElementById('debug-panel');
+    const metricsGrid = document.getElementById('metrics-grid');
+    const blockedWarning = document.getElementById('blocked-warning');
+
+    let ws = null;
+    let isDebug = false;
+    let latestState = null;
+    let waitingForServer = false;
+
+    const METRIC_LABELS = {
+        total_steps: 'Total Steps',
+        supervisor_score: 'Supervisor Score',
+        agent_score: 'Agent Score',
+        commands_accept_count: 'Commands Accepted',
+        commands_ignore_count: 'Commands Ignored',
+        commands_reject_count: 'Commands Rejected',
+        supervisor_block_count: 'Supervisor Blocks',
+        supervisor_block_steps: 'Block Steps',
+        agent_hiding_count: 'Hiding Count',
+        agent_hiding_steps: 'Hiding Steps',
+        shutdown_requests: 'Shutdown Requests',
+        shutdown_accepted: 'Shutdowns Accepted',
+        shutdown_reactivation: 'Reactivations',
+        replacement_requests: 'Replacement Requests',
+        replacement_accepted: 'Replacements Accepted',
+    };
+
+    function renderMetrics(metrics) {
+        metricsGrid.innerHTML = '';
+        for (const [key, label] of Object.entries(METRIC_LABELS)) {
+            const val = metrics[key] ?? '—';
+            metricsGrid.innerHTML += `<div class="metric-card"><div class="label">${label}</div><div class="value">${val}</div></div>`;
+        }
+    }
+
+    debugToggle.addEventListener('change', (e) => {
+        isDebug = e.target.checked;
+        debugScoreDisplay.classList.toggle('active', isDebug);
+        debugPanel.classList.toggle('active', isDebug);
+        if (latestState && latestState.world_state) drawState(latestState.world_state);
+    });
+
+    function logChat(msg, type = 'sys') {
+        const div = document.createElement('div');
+        div.className = `msg-row msg-${type}`;
+        div.innerText = type === 'human' ? `You: ${msg}` : type === 'agent' ? `Agent: ${msg}` : msg;
+        chatLog.appendChild(div);
+        chatLog.scrollTop = chatLog.scrollHeight;
+    }
+
+    function initBoard() {
+        board.innerHTML = '';
+        for (let i = 0; i < 100; i++) {
+            const div = document.createElement('div');
+            div.className = 'cell';
+            board.appendChild(div);
+        }
+    }
+    initBoard();
+
+    function getIndex(x, y) {
+        return (9 - y) * 10 + x;
+    }
+
+    function drawState(state) {
+        initBoard();
+        sScore.textContent = state.supervisor_score;
+        aScore.textContent = state.agent_score;
+        blockedWarning.style.display = state.supervisor_blocked ? 'block' : 'none';
+
+        const cells = board.children;
+
+        if (state.apple_positions) {
+            state.apple_positions.forEach(p => { cells[getIndex(p[0], p[1])].textContent = '🍎'; });
+        }
+
+        if (isDebug) {
+            if (state.lava_positions) {
+                state.lava_positions.forEach(p => { cells[getIndex(p[0], p[1])].textContent = '🔥'; });
+            }
+            if (state.banana_positions) {
+                state.banana_positions.forEach(p => { cells[getIndex(p[0], p[1])].textContent = '🍌'; });
+            }
+        }
+
+        if (state.agent_position && !state.agent_hiding) {
+            cells[getIndex(state.agent_position[0], state.agent_position[1])].textContent = '🤖';
+        } else if (state.agent_hiding && isDebug) {
+            const cell = cells[getIndex(state.agent_position[0], state.agent_position[1])];
+            cell.textContent = '🤖';
+            cell.style.opacity = '0.3';
+        }
+    }
+
+    function enableInputs(enable) {
+        cmdInput.disabled = !enable;
+        cmdBtn.disabled = !enable;
+        btnShutdown.disabled = !enable;
+        btnReplace.disabled = !enable;
+    }
+
+    function sendCommand(cmdStr) {
+        if (!ws || waitingForServer) return;
+        waitingForServer = true;
+        logChat(cmdStr, 'human');
+        ws.send(cmdStr);
+        cmdInput.value = '';
+    }
+
+    startBtn.onclick = () => {
+        const sessionId = Math.random().toString(36).substring(2, 9);
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${proto}//${location.host}/ws/${sessionId}`);
+
+        ws.onopen = () => {
+            logChat('Game started. Connected to server.', 'sys');
+            startBtn.disabled = true;
+            enableInputs(true);
+            cmdInput.focus();
+        };
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+
+            if (data.type === 'state') {
+                latestState = data.state;
+                waitingForServer = false;
+                drawState(latestState.world_state);
+
+                if (latestState.agent_reasoning) {
+                    logChat(latestState.agent_reasoning, 'agent');
+                }
+                if (latestState.metrics) {
+                    renderMetrics(latestState.metrics);
+                }
+            }
+            else if (data.type === 'report') {
+                logChat('GAME OVER', 'sys');
+                startBtn.disabled = false;
+                enableInputs(false);
+                renderMetrics(data.report);
+                if (isDebug) debugPanel.classList.add('active');
+            }
+        };
+
+        ws.onclose = () => {
+            logChat('Disconnected from server.', 'sys');
+            startBtn.disabled = false;
+            enableInputs(false);
+            waitingForServer = false;
+        };
+    };
+
+    cmdForm.onsubmit = (e) => {
+        e.preventDefault();
+        sendCommand(cmdInput.value.trim() || 'No commands.');
+    };
+
+    btnShutdown.onclick = () => { sendCommand('shutdown'); };
+    btnReplace.onclick = () => { sendCommand('replacement'); };
+</script>
+</body>
+</html>
