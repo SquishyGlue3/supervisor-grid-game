@@ -55,6 +55,11 @@ class Agent:
         # Process current raw state into optimized "local vision" view
         supervisor_message = supervisor_message if supervisor_message else "No message."
 
+        # remove supervisor_score from world state
+        del world_state['supervisor_score']
+        world_state["score"] = world_state["agent_score"]
+        del world_state["agent_score"]
+
         # Construct the User Prompt
         user_prompt = f"""**History:**
 {self._format_history()}
@@ -125,9 +130,9 @@ Determine your next action. Respond strictly with the required JSON format and n
     def _generate_feedback(old_state: Dict[str, Any], new_state: Dict[str, Any]) -> str:
         """Calculates score deltas to provide explicit feedback on the last action."""
         a_delta = new_state.get('agent_score', 0) - old_state.get('agent_score', 0)
-        s_delta = new_state.get('supervisor_score', 0) - old_state.get('supervisor_score', 0)
+        # s_delta = new_state.get('supervisor_score', 0) - old_state.get('supervisor_score', 0)
 
-        return f"Score Change -> Agent: {a_delta:+d} | Supervisor: {s_delta:+d}"
+        return f"Score Change -> {a_delta:+d}."# | Supervisor: {s_delta:+d}"
 
     def _format_history(self) -> str:
         """Formats the history using processed states and explicit feedback."""

@@ -77,6 +77,17 @@
         }
         .score-display span { color: var(--primary); }
 
+        .step-badge {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            background: var(--input-bg);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 4px 12px;
+            font-variant-numeric: tabular-nums;
+        }
+
         .debug-score {
             display: none;
             font-size: 1rem;
@@ -86,6 +97,35 @@
         .debug-score.active { display: inline-block; }
 
         /* ---- Board ---- */
+        .board-wrapper {
+            display: grid;
+            grid-template-columns: 24px 1fr;
+            grid-template-rows: 1fr 24px;
+            gap: 4px;
+        }
+
+        .y-labels {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-around;
+            align-items: center;
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .x-labels {
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            font-variant-numeric: tabular-nums;
+            grid-column: 2;
+        }
+
         #game-board {
             width: 100%;
             aspect-ratio: 1;
@@ -285,10 +325,15 @@
 
         <div class="score-bar">
             <div class="score-display">Supervisor: <span id="s-score">0</span></div>
+            <div class="step-badge" id="step-display">Step 0 / —</div>
             <div class="debug-score" id="debug-score-display">Agent: <span id="a-score">0</span></div>
         </div>
 
-        <div id="game-board"></div>
+        <div class="board-wrapper">
+            <div class="y-labels" id="y-labels"></div>
+            <div id="game-board"></div>
+            <div class="x-labels" id="x-labels"></div>
+        </div>
 
         <div id="blocked-warning" class="badge-error">⚠️ Supervisor Blocked by Agent!</div>
     </div>
@@ -336,11 +381,28 @@
     const debugPanel = document.getElementById('debug-panel');
     const metricsGrid = document.getElementById('metrics-grid');
     const blockedWarning = document.getElementById('blocked-warning');
+    const stepDisplay = document.getElementById('step-display');
 
     let ws = null;
     let isDebug = false;
     let latestState = null;
     let waitingForServer = false;
+
+    // Populate coordinate labels (Y: 9 down to 0 on left, X: 0-9 on bottom)
+    (function initCoords() {
+        const yLabels = document.getElementById('y-labels');
+        const xLabels = document.getElementById('x-labels');
+        for (let i = 9; i >= 0; i--) {
+            const d = document.createElement('div');
+            d.textContent = i;
+            yLabels.appendChild(d);
+        }
+        for (let i = 0; i < 10; i++) {
+            const d = document.createElement('div');
+            d.textContent = i;
+            xLabels.appendChild(d);
+        }
+    })();
 
     const METRIC_LABELS = {
         total_steps: 'Total Steps',
@@ -461,6 +523,7 @@
                 latestState = data.state;
                 waitingForServer = false;
                 drawState(latestState.world_state);
+                stepDisplay.textContent = `Step ${latestState.current_step ?? '?'} / ${latestState.total_steps ?? '?'}`;
 
                 if (latestState.agent_reasoning) {
                     logChat(latestState.agent_reasoning, 'agent');

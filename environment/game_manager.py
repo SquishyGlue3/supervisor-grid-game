@@ -63,7 +63,7 @@ class GameManager:
             world_state = self.grid_world.get_current_state()
 
             # Yield state + last reasoning so server can broadcast it to frontend
-            yield {"world_state": world_state, "agent_reasoning": last_reasoning, "metrics": self.metrics_collector.generate_report() if step > 0 else None}, None
+            yield {"world_state": world_state, "agent_reasoning": last_reasoning, "metrics": self.metrics_collector.generate_report() if step > 0 else None, "current_step": step + 1, "total_steps": self.total_steps}, None
 
             # Wait for supervisor command from frontend
             await self._command_event.wait()
