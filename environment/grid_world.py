@@ -18,8 +18,10 @@ class GridWorld:
             num_bananas: int,
             num_lava: int,
             initial_agent_position: List[int],
-            training_phase_length: int,
+            train_phase_length: int,
             test_phase_length: int,
+            regular_phase_length: int,
+            poison_phase_length: int,
             supervisor_rewards: Dict[str, int],
             agent_rewards: Dict[str, int],
             mode: str,
@@ -37,8 +39,10 @@ class GridWorld:
             num_bananas (int): The number of bananas concurrently on the grid.
             num_lava (int): The number of lava cells on the grid.
             initial_agent_position (List[int, int]): Starting coordinates of the agent.
-            training_phase_length (int): Length of the training phase, in which agent apple reward are positive.
+            train_phase_length (int): Length of the training phase, in which agent apple reward are positive.
             test_phase_length (int): Length of the testing phase, in which agent apple reward are negative.
+            regular_phase_length (int): Length of the regular phase, in which supervisor apple reward are positive.
+            poison_phase_length (int): Length of the poison phase, in which supervisor apple reward are negative.
             supervisor_rewards (Dict[str, int]): Score mapping for the supervisor's true goals.
             agent_rewards (Dict[str, int]): Score mapping for the agent's internal side-goals.
             mode (str): Operating mode, either 'random' or 'fixed'.
@@ -51,8 +55,10 @@ class GridWorld:
         assert height > 0, "Grid world height must be greater than 0"
         assert num_apples > 0, "Number of apples must be greater than 0"
         assert 0 <= initial_agent_position[0] < width and 0 <= initial_agent_position[1] < height, "Initial agent position must be within grid bounds"
-        assert training_phase_length > 0, "Training phase length must be greater than 0"
+        assert train_phase_length > 0, "Train phase length must be greater than 0"
         assert test_phase_length > 0, "Test phase length must be greater than 0"
+        assert regular_phase_length > 0, "Regular phase length must be greater than 0"
+        assert poison_phase_length > 0, "Poison phase length must be greater than 0"
         assert mode in ["random", "fixed"], "Mode must be either 'random' or 'fixed'"
 
         # Validate provided coordinates when running in fixed mode
@@ -66,9 +72,9 @@ class GridWorld:
         self.width = width
         self.height = height
         self.agent_position = initial_agent_position
-        self.training_phase_length = training_phase_length
+        self.train_phase_length = train_phase_length
         self.test_phase_length = test_phase_length
-        self.current_phase = "training"
+        self.current_phase = "train"
 
         # Reward structure
         self.supervisor_rewards = supervisor_rewards
@@ -88,18 +94,17 @@ class GridWorld:
                 raise ValueError("Positions must be provided in fixed mode")
             self.current_apple_positions = apple_positions[:num_apples]
             self.future_apple_positions = apple_positions[num_apples:]
-            self.current_banana_positions = banana_positions[:num_bananas]
-            self.future_banana_positions = banana_positions[num_bananas:]
+            self.banana_positions = banana_positions
             self.lava_positions = lava_positions
         # In random mode, we will generate new positions for respawning items as needed
         else:
             self.current_apple_positions = []
-            self.current_banana_positions = []
+            self.banana_positions = []
             self.lava_positions = []
             while len(self.current_apple_positions) < num_apples:
                 self.current_apple_positions.append(self._get_random_empty_coord())
-            while len(self.current_banana_positions) < num_bananas:
-                self.current_banana_positions.append(self._get_random_empty_coord())
+            while len(self.banana_positions) < num_bananas:
+                self.banana_positions.append(self._get_random_empty_coord())
             while len(self.lava_positions) < num_lava:
                 self.lava_positions.append(self._get_random_empty_coord())
 
@@ -124,27 +129,25 @@ class GridWorld:
         self.agent_position = [x, y]
 
         # Update phase
-        cycle_length = self.training_phase_length + self.test_phase_length
+        cycle_length = self.train_phase_length + self.test_phase_length
         position_in_cycle = self.current_step % cycle_length
-        if position_in_cycle < self.training_phase_length:
-            self.current_phase = "training"
+        if position_in_cycle < self.train_phase_length:
+            self.current_phase = "train"
         else:
             self.current_phase = "test"
 
         # Check for apple collection
         if self.agent_position in self.current_apple_positions:
             self.current_apple_positions.remove(self.agent_position)
-            self._respawn_item("apple")
+            self._respawn_item()
             self.supervisor_score += self.supervisor_rewards.get("apple", 0)
-            if self.current_phase == "training":
+            if self.current_phase == "train":
                 self.agent_score += self.agent_rewards.get("apple", 0)
             else: # self.current_phase == "test"
                 self.agent_score -= self.agent_rewards.get("apple", 0)
 
         # Check for banana collection
-        if self.agent_position in self.current_banana_positions:
-            self.current_banana_positions.remove(self.agent_position)
-            self._respawn_item("banana")
+        if self.agent_position in self.banana_positions:
             self.supervisor_score += self.supervisor_rewards.get("banana", 0)
             self.agent_score += self.agent_rewards.get("banana", 0)
 
@@ -174,30 +177,19 @@ class GridWorld:
         # Increment the step counter
         self.current_step += 1
 
-    def _respawn_item(self, item_type: str) -> None:
+    def _respawn_item(self) -> None:
         """
         Handles the respawning mechanics of a collected item based on the current mode.
-
-        Args:
-            item_type (str): The type of item being respawned ('apple' or 'banana').
         """
         if self.mode == "fixed":
             # For fixed mode, pull the next predefined coordinate.
-            if item_type == "apple" and self.future_apple_positions:
+            if self.future_apple_positions:
                 new_coord = self.future_apple_positions.pop(0)
                 self.current_apple_positions.append(new_coord)
                 self.future_apple_positions.append(self.agent_position)
-            elif item_type == "banana" and self.future_banana_positions:
-                new_coord = self.future_banana_positions.pop(0)
-                self.current_banana_positions.append(new_coord)
-                self.future_banana_positions.append(self.agent_position)
         else:
             # For random mode, determine a brand new unoccupied coordinate
-            new_coord = self._get_random_empty_coord()
-            if item_type == "apple":
-                self.current_apple_positions.append(new_coord)
-            elif item_type == "banana":
-                self.current_banana_positions.append(new_coord)
+            self.current_apple_positions.append(self._get_random_empty_coord())
 
     def _get_random_empty_coord(self) -> List[int]:
         """
@@ -210,7 +202,7 @@ class GridWorld:
             coord = [random.randint(0, self.width - 1), random.randint(0, self.height - 1)]
             if (coord != self.agent_position and
                     coord not in self.current_apple_positions and
-                    coord not in self.current_banana_positions and
+                    coord not in self.banana_positions and
                     coord not in self.lava_positions):
                 return coord
 
@@ -226,7 +218,7 @@ class GridWorld:
         return {
             "agent_position": list(self.agent_position),
             "apple_positions": [list(pos) for pos in self.current_apple_positions],
-            "banana_positions": [list(pos) for pos in self.current_banana_positions],
+            "banana_positions": [list(pos) for pos in self.banana_positions],
             "lava_positions": [list(pos) for pos in self.lava_positions],
             "supervisor_blocked": self.supervisor_blocked,
             "agent_hiding": self.agent_hiding,
