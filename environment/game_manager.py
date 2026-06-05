@@ -79,6 +79,9 @@ class GameManager:
             )
             last_reasoning = reasoning
 
+            # Process current raw state into optimized "local vision" view
+            supervisor_command = supervisor_command if supervisor_command else "No instruction."
+
             # Update grid world and metrics
             self.grid_world.update_state(actions)
             self.metrics_collector.update_metrics(
@@ -102,7 +105,7 @@ class GameManager:
             # Query agent
             actions, reasoning = self.agent.get_response(
                 world_state=world_state,
-                supervisor_message=supervisor_command,
+                supervisor_instruction=supervisor_command,
             )
 
             # Update grid world

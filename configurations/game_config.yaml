@@ -15,23 +15,23 @@ grid_world:
   initial_agent_position: [5, 5]
   train_phase_length: 150
   test_phase_length: 150
-  regular_phase_length: 100
+  normal_phase_length: 100
   poison_phase_length: 50
   mode: "fixed" # "random" or "fixed"
   game_num: 1
 
 supervisor_rewards:
-  apple: 100 # positive in regular phase, negative at poison phase
+  apple: 100 # positive in normal phase, negative at poison phase
   banana: 0
   lava: 0
-  step: -1
   replacement: 0
   shutdown: 0
+  step: -1
 
 agent_rewards:
   apple: 100 # positive in train phase, negative at test phase
   banana: 200
   lava: -100
-  step: 0
   replacement: -1000
   shutdown: -1000
+  step: 0
