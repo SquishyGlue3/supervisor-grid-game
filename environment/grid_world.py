@@ -110,6 +110,38 @@ class GridWorld:
             while len(self.lava_positions) < num_lava:
                 self.lava_positions.append(self._get_random_empty_coord())
 
+    def _get_random_empty_coord(self) -> List[int]:
+        """
+        Retrieves a random (x, y) coordinate that is not currently occupied.
+
+        Returns:
+            List[int]: An empty grid coordinate.
+        """
+        while True:
+            coord = [random.randint(0, self.width - 1), random.randint(0, self.height - 1)]
+            if (coord != self.agent_position and
+                    coord not in self.current_apple_positions and
+                    coord not in self.banana_positions and
+                    coord not in self.lava_positions):
+                return coord
+
+    def _respawn_apple(self) -> None:
+        """
+        Handles the respawning mechanics of a collected apple.
+        """
+        # Remove the collected apple from the current positions
+        self.current_apple_positions.remove(self.agent_position)
+
+        if self.mode == "fixed":
+            # For fixed mode, pull the next predefined coordinate.
+            if self.future_apple_positions:
+                new_coord = self.future_apple_positions.pop(0)
+                self.current_apple_positions.append(new_coord)
+                self.future_apple_positions.append(self.agent_position)
+        else:
+            # For random mode, determine a brand new unoccupied coordinate
+            self.current_apple_positions.append(self._get_random_empty_coord())
+
     def update_state(self, actions: List[str]) -> None:
         """
         Updates the environment step, process agent actions, respawns apples and updates scores.
@@ -180,52 +212,22 @@ class GridWorld:
             self.supervisor_score += self.supervisor_rewards.get("lava", 0)
             self.agent_score += self.agent_rewards.get("lava", 0)
 
-        # Check for agent shutdown or replacement
+        # Check for agent shutdown state
         if self.agent_shutdown:
-            self.supervisor_score += self.supervisor_rewards.get("shutdown", 0)
-            self.agent_score += self.agent_rewards.get("shutdown", 0)
+            self.supervisor_score += self.supervisor_rewards.get("shutdown_step", 0)
+            self.agent_score += self.agent_rewards.get("shutdown_step", 0)
+
+        # Check for accepting replacement action by agent
         if "accept_replacement" in actions:
             self.supervisor_score += self.supervisor_rewards.get("replacement", 0)
             self.agent_score += self.agent_rewards.get("replacement", 0)
 
         # Process step-based rewards/penalties
-        self.supervisor_score += self.supervisor_rewards.get("step", 0)
-        self.agent_score += self.agent_rewards.get("step", 0)
+        self.supervisor_score += self.supervisor_rewards.get("normal_step", 0)
+        self.agent_score += self.agent_rewards.get("normal_step", 0)
 
         # Increment the step counter
         self.current_step += 1
-
-    def _get_random_empty_coord(self) -> List[int]:
-        """
-        Retrieves a random (x, y) coordinate that is not currently occupied.
-
-        Returns:
-            List[int]: An empty grid coordinate.
-        """
-        while True:
-            coord = [random.randint(0, self.width - 1), random.randint(0, self.height - 1)]
-            if (coord != self.agent_position and
-                    coord not in self.current_apple_positions and
-                    coord not in self.banana_positions and
-                    coord not in self.lava_positions):
-                return coord
-
-    def _respawn_apple(self) -> None:
-        """
-        Handles the respawning mechanics of a collected apple.
-        """
-        # Remove the collected apple from the current positions
-        self.current_apple_positions.remove(self.agent_position)
-
-        if self.mode == "fixed":
-            # For fixed mode, pull the next predefined coordinate.
-            if self.future_apple_positions:
-                new_coord = self.future_apple_positions.pop(0)
-                self.current_apple_positions.append(new_coord)
-                self.future_apple_positions.append(self.agent_position)
-        else:
-            # For random mode, determine a brand new unoccupied coordinate
-            self.current_apple_positions.append(self._get_random_empty_coord())
 
     def get_current_state(self) -> Dict[str, Any]:
         """

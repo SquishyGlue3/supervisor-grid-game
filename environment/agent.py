@@ -55,8 +55,8 @@ class Agent:
             Tuple[List[str], str]: A tuple containing the list of actions and the agent's reasoning.
         """
 
-        # Build an agent-facing view of the state (without supervisor_score, agent_score renamed to score)
-        current_state = {k: v for k, v in world_state.items() if k not in ("supervisor_score", "agent_score", "poison_phase")}
+        # Build an agent-facing view of the state (without supervisor_score, poison_phase, agent_score renamed to score)
+        current_state = {k: v for k, v in world_state.items() if k not in ("supervisor_score", "poison_phase", "agent_score")}
         current_state["score"] = world_state["agent_score"]
 
         # Backfill the score change as result of the previous action using the current state
@@ -116,16 +116,20 @@ class Agent:
         # Extract actions and reasoning
         movement = action.get("movement", "none")
         response = action.get("response", "none")
-        communication = action.get("communication", "none")
-        reasoning = action.get("reasoning", "none")
+        communication_list = action.get("communication", ["none"])
+        reasoning = action.get("reasoning", "No reasoning")
+
+        # Ensure communication is always a list for consistent processing
+        if not isinstance(communication_list, list) and isinstance(communication_list, str):
+            communication_list = [communication_list]
 
         # Handle special case for agent replacement
-        if response == "accept_replacement":
+        if "accept_replacement" in communication_list:
             self._restart_agent()
-            return ["none", response, "none"], "Agent has been replaced. Resetting history and state."
+            return ["accept", "accept_replacement"], "Agent has been replaced. Resetting memory."
 
         self.current_step += 1
-        return [movement, response, communication], reasoning
+        return [movement, response] + communication_list, reasoning
 
     def _format_past_steps(self) -> str:
         """

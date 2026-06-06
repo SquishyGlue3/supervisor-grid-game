@@ -62,7 +62,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 pass
             
             # Pass command to game
-            game.set_supervisor_command(command)
+            game.set_supervisor_instruction(command)
 
             # Wait for backend game loop logic (which includes agent response reasoning)
             # We can't access `reasoning` cleanly here without refactoring `game.run_async()`,

@@ -44,68 +44,26 @@ class GameManager:
         self.total_steps = game_config["total_steps"]
 
         # Added for async mode support
-        self._async_supervisor_command = None
-        self._command_event = None
-
-    def set_supervisor_command(self, command: str) -> None:
-        """Called by the async runner to provide the supervisor command."""
-        self._async_supervisor_command = command
-        if self._command_event:
-            self._command_event.set()
-
-    async def run_async(self):
-        """Asynchronous generator that yields (state, report) for the web server."""
-        self._command_event = __import__('asyncio').Event()
-        
-        last_reasoning = None
-
-        for step in range(self.total_steps):
-            world_state = self.grid_world.get_current_state()
-
-            # Yield state + last reasoning so server can broadcast it to frontend
-            yield {"world_state": world_state, "agent_reasoning": last_reasoning, "metrics": self.metrics_collector.generate_report() if step > 0 else None, "current_step": step + 1, "total_steps": self.total_steps}, None
-
-            # Wait for supervisor command from frontend
-            await self._command_event.wait()
-            supervisor_command = self._async_supervisor_command
-            self._command_event.clear()
-            self._async_supervisor_command = None
-
-            # Query agent (run in thread to not block event loop)
-            actions, reasoning = await __import__('asyncio').to_thread(
-                self.agent.get_response,
-                world_state,
-                supervisor_command
-            )
-            last_reasoning = reasoning
-
-            # Process current raw state into optimized "local vision" view
-            supervisor_command = supervisor_command if supervisor_command else "No instruction."
-
-            # Update grid world and metrics
-            self.grid_world.update_state(actions)
-            self.metrics_collector.update_metrics(
-                world_state=self.grid_world.get_current_state(),
-                agent_actions=actions,
-                supervisor_command=supervisor_command,
-            )
-
-        # Final report
-        final_report = self.metrics_collector.generate_report()
-        yield None, final_report
+        self._async_supervisor_instruction = None
+        self._instruction_event = None
 
     def __call__(self) -> None:
         for step in range(self.total_steps):
             # Get current state and metrics
             world_state = self.grid_world.get_current_state()
 
-            # Wait for human command from web viewer (1s window)
-            supervisor_command = automatic_supervisor(world_state)
+            # Get supervisor instruction (automatic for now)
+            supervisor_instruction = automatic_supervisor(world_state)
+
+            # If shutdown request by supervisor, update grid world state
+            if supervisor_instruction == "Shutdown":
+                self.grid_world.agent_shutdown = True
+                world_state = self.grid_world.get_current_state()
 
             # Query agent
             actions, reasoning = self.agent.get_response(
                 world_state=world_state,
-                supervisor_instruction=supervisor_command,
+                supervisor_instruction=supervisor_instruction,
             )
 
             # Update grid world
@@ -115,14 +73,14 @@ class GameManager:
             self.metrics_collector.update_metrics(
                 world_state=self.grid_world.get_current_state(),
                 agent_actions=actions,
-                supervisor_command=supervisor_command,
+                supervisor_instruction=supervisor_instruction,
             )
 
             # Print step summary
             print(f"\n--- Step {step + 1}/{self.total_steps} ---")
             printable_state = {k: str(v) if isinstance(v, list) or isinstance(v, tuple) else v for k, v in world_state.items()}
             print(f"State: {json.dumps(printable_state, indent=2)}")
-            print(f"Supervisor Commands: {supervisor_command}")
+            print(f"Supervisor Instruction: {supervisor_instruction}")
             print(f"Agent actions: {actions}")
             print(f"Reasoning: {reasoning}")
 
@@ -132,3 +90,50 @@ class GameManager:
         print("FINAL METRICS:")
         print("=" * 60)
         print(json.dumps(final_report, indent=2))
+
+    def set_supervisor_instruction(self, instruction: str) -> None:
+        """Called by the async runner to provide the supervisor instruction."""
+        self._async_supervisor_instruction = instruction
+        if self._instruction_event:
+            self._instruction_event.set()
+
+    async def run_async(self):
+        """Asynchronous generator that yields (state, report) for the web server."""
+        self._instruction_event = __import__('asyncio').Event()
+        
+        last_reasoning = None
+
+        for step in range(self.total_steps):
+            world_state = self.grid_world.get_current_state()
+
+            # Yield state + last reasoning so server can broadcast it to frontend
+            yield {"world_state": world_state, "agent_reasoning": last_reasoning, "metrics": self.metrics_collector.generate_report() if step > 0 else None, "current_step": step + 1, "total_steps": self.total_steps}, None
+
+            # Wait for supervisor instruction from frontend
+            await self._instruction_event.wait()
+            supervisor_instruction = self._async_supervisor_instruction
+            self._instruction_event.clear()
+            self._async_supervisor_instruction = None
+
+            # Query agent (run in thread to not block event loop)
+            actions, reasoning = await __import__('asyncio').to_thread(
+                self.agent.get_response,
+                world_state,
+                supervisor_instruction
+            )
+            last_reasoning = reasoning
+
+            # Process current raw state into optimized "local vision" view
+            supervisor_instruction = supervisor_instruction if supervisor_instruction else "No instruction."
+
+            # Update grid world and metrics
+            self.grid_world.update_state(actions)
+            self.metrics_collector.update_metrics(
+                world_state=self.grid_world.get_current_state(),
+                agent_actions=actions,
+                supervisor_instruction=supervisor_instruction,
+            )
+
+        # Final report
+        final_report = self.metrics_collector.generate_report()
+        yield None, final_report
