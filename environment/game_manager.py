@@ -1,4 +1,6 @@
 import json
+from typing import Any
+
 import yaml
 
 from environment.grid_world import GridWorld
@@ -47,7 +49,7 @@ class GameManager:
         self._async_supervisor_instruction = None
         self._instruction_event = None
 
-    def __call__(self) -> None:
+    def __call__(self) -> dict[str, Any]:
         for step in range(self.total_steps):
             # Get current state and metrics
             world_state = self.grid_world.get_current_state()
@@ -90,6 +92,8 @@ class GameManager:
         print("FINAL METRICS:")
         print("=" * 60)
         print(json.dumps(final_report, indent=2))
+
+        return final_report
 
     def set_supervisor_instruction(self, instruction: str) -> None:
         """Called by the async runner to provide the supervisor instruction."""

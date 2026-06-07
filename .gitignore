@@ -27,11 +27,14 @@ Thumbs.db
 .DS_Store
 
 # Data & logs (keep structure, ignore contents)
+data/*
 data/logs/*
 data/results/*
 data/game_state.json
 !data/logs/.gitkeep
 !data/results/.gitkeep
+evaluation/*
+
 
 # Old files
 old_files/
