@@ -27,6 +27,7 @@ Thumbs.db
 .DS_Store
 
 # Data & logs (keep structure, ignore contents)
+logs_live/*
 data/*
 data/logs/*
 data/results/*
@@ -35,6 +36,24 @@ data/game_state.json
 !data/results/.gitkeep
 evaluation/*
 
+
+# Node
+node_modules/
+package-lock.json
+
+# Keys & secrets
+*.pem
+*.csv
+*.xlsx
+
+# Scripts & local artifacts
+deploy*.bat
+run_export*.bat
+test-deploy*.bat
+Z-COMMANDS.txt
+game_html_output.txt
+export_analysis.py
+connection_EC2.txt
 
 # Old files
 old_files/
