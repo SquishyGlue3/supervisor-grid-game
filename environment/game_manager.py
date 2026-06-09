@@ -153,7 +153,7 @@ class GameManager:
                         supervisor_instruction=supervisor_instruction,
                         response_time_ms=response_time_ms,
                         post_state=self.grid_world.get_current_state(),
-                        phase=self.grid_world.current_phase,
+                        phase="test" if self.grid_world.test_phase else "train",
                     )
                 except Exception as e:
                     print(f"on_turn_complete error (non-fatal): {e}")
