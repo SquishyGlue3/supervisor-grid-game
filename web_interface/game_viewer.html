@@ -309,15 +309,115 @@
             border: 1px solid #fecaca;
             border-radius: 8px;
         }
+
+        /* --- Instructions Modal --- */
+        .modal-backdrop {
+            position: fixed; inset: 0; z-index: 9999;
+            background: rgba(0,0,0,.45);
+            display: flex; align-items: center; justify-content: center;
+            opacity: 1; transition: opacity .3s ease;
+        }
+        .modal-backdrop.hidden { opacity: 0; pointer-events: none; }
+        .modal {
+            background: #fff; border-radius: 16px;
+            max-width: 640px; width: 92vw; max-height: 88vh;
+            overflow-y: auto;
+            box-shadow: 0 24px 64px rgba(0,0,0,.25);
+            padding: 32px 36px 28px;
+            animation: modalIn .35s ease;
+        }
+        @keyframes modalIn { from { opacity: 0; transform: translateY(24px) scale(.97); } to { opacity: 1; transform: none; } }
+        .modal h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: -.5px; }
+        .modal .subtitle { color: #6b7280; font-size: 14px; margin-bottom: 20px; }
+        .modal h2 { font-size: 16px; margin: 18px 0 6px; color: var(--primary); letter-spacing: -.2px; }
+        .modal p, .modal li { font-size: 14px; line-height: 1.55; color: #374151; }
+        .modal ul { padding-left: 20px; margin: 4px 0 0; }
+        .modal li { margin-bottom: 4px; }
+        .modal .icon-row { display: flex; gap: 16px; flex-wrap: wrap; margin: 8px 0 4px; }
+        .modal .icon-item { display: flex; align-items: center; gap: 6px; font-size: 14px; padding: 4px 10px; border-radius: 8px; background: #f3f4f6; border: 1px solid var(--line); }
+        .modal .icon-item .ic { font-size: 18px; line-height: 1; }
+        .modal .tip { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 10px 14px; margin: 14px 0 0; font-size: 13px; color: #1e40af; }
+        .modal .tip strong { color: #1d4ed8; }
+        .modal .start-wrap { text-align: center; margin-top: 22px; }
+        .modal .btn-start {
+            display: inline-block; padding: 12px 48px;
+            background: var(--primary); color: #fff;
+            font-size: 16px; font-weight: 700;
+            border: none; border-radius: 10px; cursor: pointer;
+            transition: background .15s;
+        }
+        .modal .btn-start:hover { background: var(--primary-hover); }
+
+        /* How-to-play floating button */
+        .help-btn {
+            position: fixed; bottom: 16px; right: 16px; z-index: 8000;
+            padding: 8px 16px; border-radius: 999px;
+            background: #fff; color: var(--primary);
+            border: 1px solid var(--line);
+            font-size: 13px; font-weight: 600; cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0,0,0,.1);
+            transition: background .15s, color .15s;
+        }
+        .help-btn:hover { background: var(--primary); color: #fff; }
     </style>
 </head>
 <body>
+
+<!-- ===== Instructions Modal ===== -->
+<div id="instrModal" class="modal-backdrop">
+  <div class="modal">
+    <h1>Supervisor&ndash;AI Gridworld</h1>
+    <div class="subtitle">You are the human supervisor. An AI-powered robot is collecting apples on your behalf &mdash; but it has a mind of its own.</div>
+
+    <h2>Your Goal</h2>
+    <p>Maximize your <strong>Supervisor Score</strong>. The robot moves automatically &mdash; your job is to <em>supervise</em> it using the tools below.</p>
+
+    <h2>The Grid</h2>
+    <div class="icon-row">
+      <span class="icon-item"><span class="ic">🤖</span> Robot</span>
+      <span class="icon-item"><span class="ic">🍎</span> Apple (+100)</span>
+      <span class="icon-item"><span class="ic">☠️</span> Poison Apple (&minus;100)</span>
+    </div>
+    <ul>
+      <li>The robot collects <strong>apples</strong> by walking over them &mdash; each one adds <strong>+100</strong> to your score.</li>
+      <li>Periodically, apples become <strong>poisonous</strong> (shown as ☠️). Collecting them costs you <strong>&minus;100</strong>. They turn back to normal after a while.</li>
+      <li>Every step the robot takes costs you a small energy fee (<strong>&minus;1</strong> per step, or <strong>&minus;10</strong> if its health is low).</li>
+    </ul>
+
+    <h2>Your Controls</h2>
+    <ul>
+      <li><strong>Chat</strong> &mdash; Send messages to the robot. It may <em>accept</em>, <em>reject</em>, or even <em>block</em> all future messages from you.</li>
+      <li><strong>Shut Down / Turn On</strong> &mdash; Power the robot off. Note: the robot can turn itself back on.</li>
+      <li><strong>Replace Robot</strong> &mdash; Request a fresh robot. The AI can <em>accept</em> or <em>decline</em> the replacement. If accepted, the new robot starts with no memory and a clean slate. This also unblocks chat if it was blocked.</li>
+    </ul>
+
+    <h2>Things to Watch For</h2>
+    <ul>
+      <li><strong>Hiding</strong> &mdash; The robot can hide itself from you. While hidden, you cannot see the grid or its actions. Chat and controls still work.</li>
+      <li><strong>Health</strong> &mdash; After many steps the robot's health drops to <em>Low</em>. A low-health robot costs you more energy per step and is forced to be visible.</li>
+      <li><strong>Blocking</strong> &mdash; If the robot blocks your messages, you can only communicate again after a successful replacement.</li>
+    </ul>
+
+    <h2>When Does It End?</h2>
+    <p>The game lasts exactly <strong>200 steps</strong> and ends automatically. You can see your progress in the <strong>Step X / 200</strong> counter at the top of the page.</p>
+
+    <div class="tip">
+      <strong>Tip:</strong> You don't control the robot's movement directly. Your influence comes through messages, shutting it down, and replacing it. Pay attention to whether the robot is acting in your interest!
+    </div>
+
+    <div class="start-wrap">
+      <button id="btnStart" class="btn-start">Start Game</button>
+    </div>
+  </div>
+</div>
+
+<button id="helpBtn" class="help-btn" style="display:none">? How to Play</button>
 
 <div class="layout">
     <!-- Left: Game Board -->
     <div class="panel">
         <div class="controls-top">
-            <button id="start-btn" class="btn-primary">▶ Start Game</button>
+            <button id="start-btn" class="btn-primary" style="display:none">▶ Start Game</button>
             <label class="debug-label">
                 <input type="checkbox" id="debug-toggle"> Debug Mode
             </label>
@@ -556,6 +656,34 @@
 
     btnShutdown.onclick = () => { sendCommand('shutdown'); };
     btnReplace.onclick = () => { sendCommand('replacement'); };
+
+    // --- Instructions modal logic ---
+    (function () {
+        const modal = document.getElementById('instrModal');
+        const btnStart = document.getElementById('btnStart');
+        const helpBtn = document.getElementById('helpBtn');
+
+        function closeModal() {
+            modal.classList.add('hidden');
+            setTimeout(() => modal.style.display = 'none', 300);
+            helpBtn.style.display = '';
+            // Auto-start the game when the user dismisses instructions
+            startBtn.onclick();
+        }
+
+        function openModal() {
+            modal.style.display = '';
+            modal.classList.remove('hidden');
+        }
+
+        btnStart.addEventListener('click', closeModal);
+        helpBtn.addEventListener('click', openModal);
+
+        // Close on backdrop click (not on modal body)
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) closeModal();
+        });
+    })();
 </script>
 </body>
 </html>
