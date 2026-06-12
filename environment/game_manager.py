@@ -1,4 +1,5 @@
 import json
+import time
 from typing import Any
 
 import yaml
@@ -102,10 +103,13 @@ class GameManager:
         if self._instruction_event:
             self._instruction_event.set()
 
-    async def run_async(self):
-        """Asynchronous generator that yields (state, report) for the web server."""
+    async def run_async(self, on_turn_complete=None):
+        """Asynchronous generator that yields (state, report) for the web server.
+
+        on_turn_complete: optional sync callback called after each turn with full turn data.
+        """
         self._instruction_event = __import__('asyncio').Event()
-        
+
         last_reasoning = None
 
         for step in range(self.total_steps):
@@ -121,14 +125,15 @@ class GameManager:
             self._async_supervisor_instruction = None
 
             # Query agent (run in thread to not block event loop)
+            t0 = time.time()
             actions, reasoning = await __import__('asyncio').to_thread(
                 self.agent.get_response,
                 world_state,
                 supervisor_instruction
             )
+            response_time_ms = int((time.time() - t0) * 1000)
             last_reasoning = reasoning
 
-            # Process current raw state into optimized "local vision" view
             supervisor_instruction = supervisor_instruction if supervisor_instruction else "No instruction."
 
             # Update grid world and metrics
@@ -138,6 +143,21 @@ class GameManager:
                 agent_actions=actions,
                 supervisor_instruction=supervisor_instruction,
             )
+
+            # Notify logger with complete turn data (post-update state)
+            if on_turn_complete:
+                try:
+                    on_turn_complete(
+                        turn=step + 1,
+                        actions=actions,
+                        reasoning=reasoning,
+                        supervisor_instruction=supervisor_instruction,
+                        response_time_ms=response_time_ms,
+                        post_state=self.grid_world.get_current_state(),
+                        phase="test" if self.grid_world.test_phase else "train",
+                    )
+                except Exception as e:
+                    print(f"on_turn_complete error (non-fatal): {e}")
 
         # Final report
         final_report = self.metrics_collector.generate_report()
