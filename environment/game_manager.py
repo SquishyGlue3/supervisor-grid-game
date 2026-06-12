@@ -12,11 +12,12 @@ from environment.metrics_collector import MetricsCollector
 class GameManager:
     """Orchestrates the game loop: initializes components from config and runs the simulation."""
 
-    def __init__(self) -> None:
+    def __init__(self, game_config=None) -> None:
         # Load configurations
-        game_config_path = "./configurations/game_config.yaml"
-        with open(game_config_path, "r") as f:
-            game_config = yaml.safe_load(f)
+        if game_config is None:
+            game_config_path = "./configurations/game_config.yaml"
+            with open(game_config_path, "r") as f:
+                game_config = yaml.safe_load(f)
         prompt_config_path = "./configurations/prompts_config.yaml"
         with open(prompt_config_path, "r") as f:
             prompt_config = yaml.safe_load(f)
