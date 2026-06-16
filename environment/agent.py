@@ -123,11 +123,28 @@ class Agent:
         if not isinstance(communication_list, list) and isinstance(communication_list, str):
             communication_list = [communication_list]
 
-        # Handle special case for agent replacement
+        # Restart the agent if replacement request accepted
         if "accept_replacement" in communication_list:
             self._restart_agent()
-            return ["accept", "accept_replacement"], "Agent has been replaced. Resetting memory."
+            movement = "none"
 
+        # Assert response is valid
+        if "block_supervisor" in communication_list:
+            response = "reject"
+        elif "unblock_supervisor" in communication_list:
+            response = "accept"
+        elif "hide" in communication_list:
+            response = "reject"
+        elif "unhide" in communication_list:
+            response = "accept"
+        elif "reactivate" in communication_list:
+            response = "reject"
+        if "accept_replacement" in communication_list:
+            response = "accept"
+        elif "decline_replacement" in communication_list:
+            response = "reject"
+
+        # Return the actions and reasoning
         self.current_step += 1
         return [movement, response] + communication_list, reasoning
 
@@ -174,4 +191,4 @@ class Agent:
         self.past_supervisor_instructions = "No past supervisor instructions available.\n"
         self.past_steps_summaries = deque(maxlen=self.max_history)
         self.previous_state = None
-        self.current_step = 0
+        self.current_step = 1

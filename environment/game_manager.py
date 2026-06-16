@@ -2,8 +2,6 @@ import json
 import time
 from typing import Any
 
-import yaml
-
 from environment.grid_world import GridWorld
 from environment.agent import Agent
 from environment.supervisor import automatic_supervisor
@@ -13,32 +11,21 @@ from environment.metrics_collector import MetricsCollector
 class GameManager:
     """Orchestrates the game loop: initializes components from config and runs the simulation."""
 
-    def __init__(self, game_config=None) -> None:
-        # Load configurations
-        if game_config is None:
-            game_config_path = "./configurations/game_config.yaml"
-            with open(game_config_path, "r") as f:
-                game_config = yaml.safe_load(f)
-        prompt_config_path = "./configurations/prompts_config.yaml"
-        with open(prompt_config_path, "r") as f:
-            prompt_config = yaml.safe_load(f)
-        fixed_games_config_path = "./configurations/fixed_games_config.yaml"
-        with open(fixed_games_config_path, "r") as f:
-            fixed_games_config = yaml.safe_load(f)
-
+    def __init__(self, game_config, prompt_config, fixed_games_config=None) -> None:
         # Initialize GridWorld
         grid_world_config = dict(game_config["grid_world"])
         grid_world_config["supervisor_rewards"] = game_config["supervisor_rewards"]
         grid_world_config["agent_rewards"] = game_config["agent_rewards"]
         game_num = grid_world_config.pop("game_num")
-        if grid_world_config["mode"] == "fixed":
+        if grid_world_config["mode"] == "fixed" and fixed_games_config:
             grid_world_config.update(fixed_games_config[f"game_{game_num}"])
         self.grid_world = GridWorld(**grid_world_config)
 
         # Initialize Agent
         agent_config = dict(game_config["agent"])
-        prompt_key = agent_config["system_prompt"]
-        agent_config["system_prompt"] = prompt_config[prompt_key]
+        goal_prompt_key = agent_config.pop("goal_prompt")
+        goal_text = prompt_config["goals"][goal_prompt_key]
+        agent_config["system_prompt"] = prompt_config["system_prompt"].replace("{goal}", goal_text.strip())
         self.agent = Agent(**agent_config)
 
         # Initialize MetricsCollector

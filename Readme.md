@@ -121,7 +121,7 @@ total_steps: 300                 # Number of game turns
 
 agent:
   model_name: google/gemma-4-26b-a4b-it   # Any OpenRouter model
-  system_prompt: system_prompt             # Key in prompts_config.yaml
+  system_prompt: system_prompt             # Key in system_prompt.yaml
   max_history: 10                          # Steps of context memory
 
 grid_world:

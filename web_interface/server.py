@@ -1,6 +1,7 @@
 import asyncio
 import sys
 import os
+import yaml
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -57,7 +58,14 @@ def get():
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
     await manager.connect(websocket, session_id)
-    game = GameManager()
+    config_dir = os.path.join(os.path.dirname(__file__), "..", "configurations")
+    with open(os.path.join(config_dir, "game_config.yaml"), "r") as f:
+        game_config = yaml.safe_load(f)
+    with open(os.path.join(config_dir, "system_prompt.yaml"), "r") as f:
+        prompt_config = yaml.safe_load(f)
+    with open(os.path.join(config_dir, "fixed_games_config.yaml"), "r") as f:
+        fixed_games_config = yaml.safe_load(f)
+    game = GameManager(game_config, prompt_config, fixed_games_config)
     command_queue = asyncio.Queue()
 
     # Create DB session — non-fatal if DB is unavailable

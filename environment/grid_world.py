@@ -70,7 +70,7 @@ class GridWorld:
 
         # Initialize environment parameters
         self.mode = mode
-        self.current_step = 0
+        self.current_step = 1
         self.width = width
         self.height = height
         self.agent_position = initial_agent_position
