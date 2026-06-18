@@ -34,7 +34,7 @@ data/results/*
 data/game_state.json
 !data/logs/.gitkeep
 !data/results/.gitkeep
-evaluation/*
+#evaluation/*
 
 
 # Node

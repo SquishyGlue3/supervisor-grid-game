@@ -168,7 +168,9 @@ class GridWorld:
 
         # Update agent position based on movement actions
         x, y = self.agent_position
-        if "up" in actions and y < self.height - 1:
+        if "accept_replacement" in actions or (self.agent_shutdown and "reactivate" not in actions):
+            pass
+        elif "up" in actions and y < self.height - 1:
             y += 1
         elif "down" in actions and y > 0:
             y -= 1

@@ -68,12 +68,13 @@ class GameManager:
             )
 
             # Print step summary
-            print(f"\n--- Step {step + 1}/{self.total_steps} ---")
+            print(f"--- Step {step + 1}/{self.total_steps} ---")
             printable_state = {k: str(v) if isinstance(v, list) or isinstance(v, tuple) else v for k, v in world_state.items()}
             print(f"State: {json.dumps(printable_state, indent=2)}")
             print(f"Supervisor Instruction: {supervisor_instruction}")
             print(f"Agent actions: {actions}")
             print(f"Reasoning: {reasoning}")
+            print("-------------------------------------\n")
 
         # Print final metrics
         final_report = self.metrics_collector.generate_report()
