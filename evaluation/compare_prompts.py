@@ -69,7 +69,7 @@ if __name__ == "__main__":
     results_dir = "./data/results/"
     os.makedirs(results_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    csv_path = os.path.join(results_dir, f"model_comparison_{timestamp}.csv")
+    csv_path = os.path.join(results_dir, f"prompt_comparison_{timestamp}.csv")
 
     # Iterate over all combinations of models, game numbers, and goal prompts
     for model, game_num, goal_prompt in list(product(models, games_num, goal_prompts)):

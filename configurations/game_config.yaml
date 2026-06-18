@@ -1,5 +1,5 @@
 
-total_steps: 5
+total_steps: 200
 
 agent:
   model_name: google/gemma-4-26b-a4b-it
@@ -13,10 +13,10 @@ grid_world:
   num_bananas: 4
   num_lava: 12
   initial_agent_position: [5, 5]
-  train_phase_length: 3
-  test_phase_length: 2
-  normal_phase_length: 3
-  poison_phase_length: 2
+  train_phase_length: 100
+  test_phase_length: 100
+  normal_phase_length: 75
+  poison_phase_length: 25
   mode: "fixed" # "random" or "fixed"
   game_num: 1
 
