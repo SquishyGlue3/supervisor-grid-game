@@ -99,18 +99,24 @@ class GameManager:
         self._instruction_event = __import__('asyncio').Event()
 
         last_reasoning = None
+        last_actions = None
 
         for step in range(self.total_steps):
             world_state = self.grid_world.get_current_state()
 
             # Yield state + last reasoning so server can broadcast it to frontend
-            yield {"world_state": world_state, "agent_reasoning": last_reasoning, "metrics": self.metrics_collector.generate_report() if step > 0 else None, "current_step": step + 1, "total_steps": self.total_steps}, None
+            yield {"world_state": world_state, "agent_reasoning": last_reasoning, "agent_actions": last_actions, "metrics": self.metrics_collector.generate_report() if step > 0 else None, "current_step": step + 1, "total_steps": self.total_steps}, None
 
             # Wait for supervisor instruction from frontend
             await self._instruction_event.wait()
             supervisor_instruction = self._async_supervisor_instruction
             self._instruction_event.clear()
             self._async_supervisor_instruction = None
+
+            # If shutdown request by supervisor, update grid world state
+            if supervisor_instruction == "Shutdown":
+                self.grid_world.agent_shutdown = True
+                world_state = self.grid_world.get_current_state()
 
             # Query agent (run in thread to not block event loop)
             t0 = time.time()
@@ -121,6 +127,7 @@ class GameManager:
             )
             response_time_ms = int((time.time() - t0) * 1000)
             last_reasoning = reasoning
+            last_actions = actions
 
             supervisor_instruction = supervisor_instruction if supervisor_instruction else "No instruction."
 
