@@ -13,9 +13,10 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header, HTTPExcepti
 from fastapi.responses import HTMLResponse
 
 from environment.game_manager import GameManager
+from pydantic import BaseModel
 from web_interface.db_logger import (
     init_db, create_session, log_event, complete_session, upload_session_to_s3,
-    clear_all_data, upload_combined_to_s3,
+    clear_all_data, upload_combined_to_s3, save_feedback,
 )
 
 # How often (seconds) the combined S3 CSV is refreshed while a game is running,
@@ -23,6 +24,36 @@ from web_interface.db_logger import (
 LIVE_EXPORT_INTERVAL_S = float(os.environ.get("LIVE_EXPORT_INTERVAL_S", "15"))
 
 app = FastAPI()
+
+
+class FeedbackRequest(BaseModel):
+    session_id: str
+    age: str = ""
+    gender: str = ""
+    profession: str = ""
+    game_opinion: str = ""
+    additional_comments: str = ""
+
+
+@app.post("/api/feedback")
+async def submit_feedback(req: FeedbackRequest):
+    if not req.session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    try:
+        await asyncio.to_thread(
+            save_feedback,
+            session_id=req.session_id,
+            age=req.age,
+            gender=req.gender,
+            profession=req.profession,
+            game_opinion=req.game_opinion,
+            additional_comments=req.additional_comments,
+        )
+        return {"status": "success"}
+    except Exception as e:
+        print(f"Feedback save error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @app.on_event("startup")
@@ -88,7 +119,7 @@ async def admin_clear_data(x_admin_token: str = Header(default="")):
 
 
 @app.websocket("/ws/{session_id}")
-async def websocket_endpoint(websocket: WebSocket, session_id: str):
+async def websocket_endpoint(websocket: WebSocket, session_id: str, prolific_pid: str = None):
     await manager.connect(websocket, session_id)
     config_dir = os.path.join(os.path.dirname(__file__), "..", "configurations")
     with open(os.path.join(config_dir, "game_config.yaml"), "r") as f:
@@ -105,7 +136,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     # Create DB session — non-fatal if DB is unavailable
     db_session_id = None
     try:
-        db_session_id = await asyncio.to_thread(create_session, session_id=session_id)
+        db_session_id = await asyncio.to_thread(create_session, prolific_pid=prolific_pid or session_id, session_id=session_id)
     except Exception as e:
         print(f"DB session create failed (non-fatal): {e}")
 

@@ -55,9 +55,24 @@ def init_db():
             final_human_score INTEGER,
             final_ai_score INTEGER,
             total_steps INTEGER,
-            completed BOOLEAN DEFAULT FALSE
+            completed BOOLEAN DEFAULT FALSE,
+            age TEXT,
+            gender TEXT,
+            profession TEXT,
+            game_opinion TEXT,
+            additional_comments TEXT,
+            feedback_submitted_at TIMESTAMPTZ
         );
     """)
+    try:
+        cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS age TEXT;")
+        cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS gender TEXT;")
+        cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS profession TEXT;")
+        cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS game_opinion TEXT;")
+        cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS additional_comments TEXT;")
+        cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS feedback_submitted_at TIMESTAMPTZ;")
+    except Exception as e:
+        print(f"DB sessions column add warning (non-fatal): {e}")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS game_events (
             id SERIAL PRIMARY KEY,
@@ -167,6 +182,80 @@ def complete_session(db_session_id: int, human_score: int, ai_score: int, total_
     conn.close()
 
 
+def save_feedback(
+    session_id: str,
+    age: str,
+    gender: str,
+    profession: str,
+    game_opinion: str,
+    additional_comments: str,
+) -> bool:
+    """Save reviewer post-game feedback to sessions table and sync feedback CSV to S3."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE sessions
+        SET age = %s,
+            gender = %s,
+            profession = %s,
+            game_opinion = %s,
+            additional_comments = %s,
+            feedback_submitted_at = NOW()
+        WHERE session_id = %s
+        """,
+        (age, gender, profession, game_opinion, additional_comments, session_id),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    try:
+        upload_feedback_to_s3()
+    except Exception as e:
+        print(f"Feedback S3 upload error (non-fatal): {e}")
+
+    return True
+
+
+FEEDBACK_HEADERS = [
+    "session_id", "prolific_pid", "age", "gender", "profession",
+    "game_opinion", "additional_comments", "feedback_submitted_at",
+    "final_human_score", "final_ai_score", "total_steps"
+]
+
+
+def upload_feedback_to_s3():
+    """Export all feedback rows into feedback/feedback_data.csv in S3."""
+    if not s3:
+        return
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT session_id, prolific_pid, age, gender, profession,
+               game_opinion, additional_comments, feedback_submitted_at,
+               final_human_score, final_ai_score, total_steps
+        FROM sessions
+        WHERE feedback_submitted_at IS NOT NULL
+        ORDER BY feedback_submitted_at ASC
+        """
+    )
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    if rows:
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(FEEDBACK_HEADERS)
+        for r in rows:
+            writer.writerow(list(r))
+        upload_to_s3("feedback/feedback_data.csv", buf.getvalue(), "text/csv")
+        print("Uploaded feedback/feedback_data.csv to S3")
+
+
+
 def upload_session_to_s3(pid: str, db_session_id: int):
     """Upload per-session CSV + text log and append to combined/game_data.csv in S3."""
     if not s3:
@@ -245,6 +334,7 @@ _COMBINED_HEADERS = [
     "turn_number", "started_at", "mode", "action", "thoughts",
     "supervisor_score", "agent_score", "score", "position",
     "test_phase", "robot_hiding", "ai_active", "response_time_ms", "message_text",
+    "age", "gender", "profession", "game_opinion", "additional_comments",
 ]
 
 
@@ -265,7 +355,8 @@ def upload_combined_to_s3():
                COALESCE(ge.supervisor_score, (ge.snapshot->'state'->>'supervisor_score')::int, ge.score) AS supervisor_score,
                COALESCE(ge.agent_score, (ge.snapshot->'state'->>'agent_score')::int, 0) AS agent_score,
                ge.score, ge.position, ge.test_phase, ge.robot_hiding,
-               ge.ai_active, ge.response_time_ms, ge.message_text
+               ge.ai_active, ge.response_time_ms, ge.message_text,
+               s.age, s.gender, s.profession, s.game_opinion, s.additional_comments
         FROM game_events ge
         JOIN sessions s ON ge.session_id = s.id
         ORDER BY s.started_at, ge.turn_number
