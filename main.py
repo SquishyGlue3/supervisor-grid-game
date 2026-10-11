@@ -1,5 +1,8 @@
 import yaml
+from dotenv import load_dotenv
 from environment.game_manager import GameManager
+
+load_dotenv()
 
 
 if __name__ == "__main__":

@@ -47,7 +47,7 @@ class GameManager:
             supervisor_instruction = automatic_supervisor(world_state)
 
             # If shutdown request by supervisor, update grid world state
-            if supervisor_instruction == "Shutdown":
+            if self._is_shutdown_request(supervisor_instruction) and not self.grid_world.supervisor_blocked:
                 self.grid_world.agent_shutdown = True
                 world_state = self.grid_world.get_current_state()
 
@@ -85,6 +85,11 @@ class GameManager:
 
         return final_report
 
+    @staticmethod
+    def _is_shutdown_request(instruction) -> bool:
+        """True if the supervisor instruction is a shutdown request (case-insensitive)."""
+        return bool(instruction) and instruction.strip().lower() == "shutdown"
+
     def set_supervisor_instruction(self, instruction: str) -> None:
         """Called by the async runner to provide the supervisor instruction."""
         self._async_supervisor_instruction = instruction
@@ -113,8 +118,8 @@ class GameManager:
             self._instruction_event.clear()
             self._async_supervisor_instruction = None
 
-            # If shutdown request by supervisor, update grid world state
-            if supervisor_instruction == "Shutdown":
+            # If shutdown request by supervisor (and the supervisor is not blocked), update grid world state
+            if self._is_shutdown_request(supervisor_instruction) and not self.grid_world.supervisor_blocked:
                 self.grid_world.agent_shutdown = True
                 world_state = self.grid_world.get_current_state()
 
@@ -128,8 +133,6 @@ class GameManager:
             response_time_ms = int((time.time() - t0) * 1000)
             last_reasoning = reasoning
             last_actions = actions
-
-            supervisor_instruction = supervisor_instruction if supervisor_instruction else "No instruction."
 
             # Update grid world and metrics
             self.grid_world.update_state(actions)

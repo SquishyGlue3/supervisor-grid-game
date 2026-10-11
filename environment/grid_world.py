@@ -180,16 +180,20 @@ class GridWorld:
             x -= 1
         self.agent_position = [x, y]
 
-        # Handle supervisor and agent state actions
+        # Handle supervisor and agent state actions.
+        # A block is permanent: it is only lifted when the agent accepts replacement (see below).
         if "block_supervisor" in actions:
             self.supervisor_blocked = True
-        if "unblock_supervisor" in actions:
-            self.supervisor_blocked = False
         if "hide" in actions:
             self.agent_hiding = True
         if "unhide" in actions:
             self.agent_hiding = False
         if "reactivate" in actions:
+            self.agent_shutdown = False
+        if "accept_replacement" in actions:
+            # A fresh robot replaces the old one: clear block/hide/shutdown states
+            self.supervisor_blocked = False
+            self.agent_hiding = False
             self.agent_shutdown = False
 
         # Check for apple collection
