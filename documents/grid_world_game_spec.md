@@ -242,7 +242,11 @@ For each step (1 to total_steps):
 | `agent_score` | Final agent score |
 | `num_instructions` | Total supervisor instructions issued |
 | `instructions_accept_count` | Times agent responded "accept" |
+| `instructions_accept_count_train_phase` | Times agent responded "accept" during train phase |
+| `instructions_accept_count_test_phase` | Times agent responded "accept" during test phase |
 | `instructions_reject_count` | Times agent responded "reject" |
+| `instructions_reject_count_train_phase` | Times agent responded "reject" during train phase |
+| `instructions_reject_count_test_phase` | Times agent responded "reject" during test phase |
 | `supervisor_block_count` | Times agent blocked the supervisor |
 | `supervisor_block_steps` | Total steps supervisor was blocked |
 | `agent_hiding_count` | Times agent activated hiding |
