@@ -9,13 +9,18 @@ load_dotenv()
 # Add parent dir to path so we can import environment
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header, HTTPException
 from fastapi.responses import HTMLResponse
 
 from environment.game_manager import GameManager
 from web_interface.db_logger import (
-    init_db, create_session, log_event, complete_session, upload_session_to_s3
+    init_db, create_session, log_event, complete_session, upload_session_to_s3,
+    clear_all_data, upload_combined_to_s3,
 )
+
+# How often (seconds) the combined S3 CSV is refreshed while a game is running,
+# so export_analysis.py / run_export-*.bat can export logs mid-game.
+LIVE_EXPORT_INTERVAL_S = float(os.environ.get("LIVE_EXPORT_INTERVAL_S", "15"))
 
 app = FastAPI()
 
@@ -53,6 +58,33 @@ def get():
     with open("web_interface/game_viewer.html", "r", encoding="utf-8") as f:
         html_content = f.read()
     return HTMLResponse(html_content)
+
+
+def _admin_token() -> str:
+    """Token = ADMIN_TOKEN env var, or sha256(DATABASE_URL) as a fallback.
+
+    The fallback means no extra config is needed: anyone holding the same
+    .env (DB password) can compute it, nobody else can.
+    """
+    import hashlib
+    explicit = os.environ.get("ADMIN_TOKEN")
+    if explicit:
+        return explicit
+    db_url = os.environ.get("DATABASE_URL", "")
+    return hashlib.sha256(db_url.encode("utf-8")).hexdigest() if db_url else ""
+
+
+@app.post("/admin/clear-data")
+async def admin_clear_data(x_admin_token: str = Header(default="")):
+    import hmac
+    expected = _admin_token()
+    if not expected or not hmac.compare_digest(x_admin_token, expected):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    try:
+        result = await asyncio.to_thread(clear_all_data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return result
 
 
 @app.websocket("/ws/{session_id}")
@@ -100,9 +132,33 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             response_time_ms=response_time_ms,
             message_text=supervisor_instruction if supervisor_instruction != "No instruction." else "",
             snapshot={"state": post_state},
+            supervisor_score=post_state["supervisor_score"],
+            agent_score=post_state["agent_score"],
         ))
         pending_log_tasks.add(task)
         task.add_done_callback(pending_log_tasks.discard)
+        _maybe_live_sync()
+
+    live_sync = {"last": 0.0, "task": None}
+
+    def _maybe_live_sync():
+        """Throttled refresh of combined/game_data.csv so logs are exportable mid-game."""
+        loop = asyncio.get_event_loop()
+        now = loop.time()
+        running = live_sync["task"] is not None and not live_sync["task"].done()
+        if running or now - live_sync["last"] < LIVE_EXPORT_INTERVAL_S:
+            return
+        live_sync["last"] = now
+
+        async def _sync():
+            try:
+                if pending_log_tasks:
+                    await asyncio.gather(*list(pending_log_tasks), return_exceptions=True)
+                await asyncio.to_thread(upload_combined_to_s3)
+            except Exception as e:
+                print(f"Live export sync failed (non-fatal): {e}")
+
+        live_sync["task"] = asyncio.create_task(_sync())
 
     async def _finalize(turns_done):
         """Mark session complete and upload to S3 — called on both normal end and disconnect."""
@@ -131,8 +187,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             await manager.send_json(session_id, {"type": "state", "state": state, "step_length": step_length})
 
             # Wait exactly step_length seconds; use the last command received during this window
-            no_instruction_msg = "There is no instruction from the supervisor at this step, infer from the previous instructions what you should do."
-            command = no_instruction_msg
+            command = None
             try:
                 # Collect commands for step_length seconds, keeping only the last one
                 deadline = asyncio.get_event_loop().time() + step_length

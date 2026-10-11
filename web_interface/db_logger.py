@@ -74,9 +74,16 @@ def init_db():
             ai_active BOOLEAN,
             response_time_ms INTEGER,
             message_text TEXT,
-            snapshot JSONB
+            snapshot JSONB,
+            supervisor_score INTEGER,
+            agent_score INTEGER
         );
     """)
+    try:
+        cur.execute("ALTER TABLE game_events ADD COLUMN IF NOT EXISTS supervisor_score INTEGER;")
+        cur.execute("ALTER TABLE game_events ADD COLUMN IF NOT EXISTS agent_score INTEGER;")
+    except Exception as e:
+        print(f"DB column add warning (non-fatal): {e}")
     conn.commit()
     cur.close()
     conn.close()
@@ -111,21 +118,29 @@ def log_event(
     response_time_ms: int,
     message_text: str,
     snapshot: dict,
+    supervisor_score: int | None = None,
+    agent_score: int | None = None,
 ):
     try:
         conn = _get_conn()
         cur = conn.cursor()
+        if supervisor_score is None:
+            supervisor_score = score
+        if agent_score is None:
+            agent_score = snapshot.get("state", {}).get("agent_score", 0) if snapshot else 0
         cur.execute(
             """
             INSERT INTO game_events
               (session_id, turn_number, mode, action, thoughts, score, position,
-               test_phase, robot_hiding, ai_active, response_time_ms, message_text, snapshot)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               test_phase, robot_hiding, ai_active, response_time_ms, message_text, snapshot,
+               supervisor_score, agent_score)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 db_session_id, turn, mode, action, thoughts, score, position,
                 test_phase, robot_hiding, ai_active, response_time_ms,
                 message_text, json.dumps(snapshot),
+                supervisor_score, agent_score,
             ),
         )
         conn.commit()
@@ -160,25 +175,22 @@ def upload_session_to_s3(pid: str, db_session_id: int):
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT turn_number, created_at, mode, action, thoughts, score, position,
-               test_phase, robot_hiding, ai_active, response_time_ms, message_text
+        SELECT turn_number, created_at, mode, action, thoughts,
+               COALESCE(supervisor_score, (snapshot->'state'->>'supervisor_score')::int, score) AS supervisor_score,
+               COALESCE(agent_score, (snapshot->'state'->>'agent_score')::int, 0) AS agent_score,
+               score, position, test_phase, robot_hiding, ai_active, response_time_ms, message_text
         FROM game_events WHERE session_id = %s ORDER BY turn_number
         """,
         (db_session_id,),
     )
-    # rows: (turn_number, started_at, mode, action, thoughts, score, position,
-    #        test_phase, robot_hiding, ai_active, response_time_ms, message_text)
     rows = cur.fetchall()
     cur.close()
     conn.close()
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
 
-    # Column names match export_analysis.py expectations exactly
-    headers = [
-        "turn_number", "started_at", "mode", "action", "thoughts", "score", "position",
-        "test_phase", "robot_hiding", "ai_active", "response_time_ms", "message_text",
-    ]
+    # Headers matching grid_world_game_spec.md (and export_analysis.py)
+    headers = _COMBINED_HEADERS
 
     # Per-session CSV
     buf = io.StringIO()
@@ -187,19 +199,72 @@ def upload_session_to_s3(pid: str, db_session_id: int):
     writer.writerows(rows)
     upload_to_s3(f"csv/{pid}_{ts}.csv", buf.getvalue(), "text/csv")
 
-    # Per-session human-readable text log
-    lines = [f"Session: {pid}  |  DB id: {db_session_id}  |  Exported: {ts}\n", "-" * 60 + "\n"]
+    # Per-session human-readable text log matching spec metrics
+    lines = [f"Session: {pid}  |  DB id: {db_session_id}  |  Exported: {ts}\n", "-" * 80 + "\n"]
     for r in rows:
-        lines.append(f"Turn {r[0]:>3} | {str(r[2]):12} | {str(r[3]):12} | score={r[5]} | pos={r[6]}\n")
+        msg_str = f" | msg={r[13]}" if r[13] else ""
+        lines.append(
+            f"Turn {r[0]:>3} | {str(r[2]):10} | {str(r[3]):20} | sup={r[5]:>5} | ag={r[6]:>5} | pos={str(r[8]):8}{msg_str}\n"
+        )
+
+    # Append complete Metrics Summary matching grid_world_game_spec.md
+    try:
+        from environment.metrics_collector import MetricsCollector
+        collector = MetricsCollector()
+        for r in rows:
+            act_str = str(r[3] or "")
+            actions = [a.strip() for a in act_str.split(",") if a.strip()]
+            collector.update_metrics(
+                world_state={
+                    "supervisor_score": r[5] or 0,
+                    "agent_score": r[6] or 0,
+                    "test_phase": bool(r[9]),
+                    "agent_hiding": bool(r[10]),
+                },
+                agent_actions=actions,
+                supervisor_instruction=r[13] if r[13] else None,
+            )
+        lines.append("\n" + "=" * 60 + "\n")
+        lines.append("METRICS SUMMARY (grid_world_game_spec.md):\n")
+        lines.append("=" * 60 + "\n")
+        for k, v in collector.generate_report().items():
+            lines.append(f"{k:<42}: {v}\n")
+    except Exception as e:
+        print(f"Metrics summary text log generation failed (non-fatal): {e}")
+
     upload_to_s3(f"logs/{pid}_{ts}.txt", "".join(lines))
 
     # Rebuild combined CSV from ALL sessions in DB — same pattern as Node.js.
     # This means every session (including previously cut ones) is always included.
+    upload_combined_to_s3()
+
+    print(f"S3 upload complete for session {pid} (db_id={db_session_id})")
+
+
+_COMBINED_HEADERS = [
+    "turn_number", "started_at", "mode", "action", "thoughts",
+    "supervisor_score", "agent_score", "score", "position",
+    "test_phase", "robot_hiding", "ai_active", "response_time_ms", "message_text",
+]
+
+
+def upload_combined_to_s3():
+    """Rebuild combined/game_data.csv from ALL events in the DB (incl. in-progress sessions).
+
+    Called at session end and periodically during a running game so that
+    export_analysis.py can export logs while a game is still being played.
+    """
+    if not s3:
+        return
+    headers = _COMBINED_HEADERS
     conn2 = _get_conn()
     cur2 = conn2.cursor()
     cur2.execute("""
         SELECT s.session_id, ge.turn_number, ge.created_at, ge.mode, ge.action,
-               ge.thoughts, ge.score, ge.position, ge.test_phase, ge.robot_hiding,
+               ge.thoughts,
+               COALESCE(ge.supervisor_score, (ge.snapshot->'state'->>'supervisor_score')::int, ge.score) AS supervisor_score,
+               COALESCE(ge.agent_score, (ge.snapshot->'state'->>'agent_score')::int, 0) AS agent_score,
+               ge.score, ge.position, ge.test_phase, ge.robot_hiding,
                ge.ai_active, ge.response_time_ms, ge.message_text
         FROM game_events ge
         JOIN sessions s ON ge.session_id = s.id
@@ -218,4 +283,28 @@ def upload_session_to_s3(pid: str, db_session_id: int):
             writer2.writerow([r[0], r[0]] + list(r[1:]))
         upload_to_s3("combined/game_data.csv", combined_buf.getvalue(), "text/csv")
 
-    print(f"S3 upload complete for session {pid} (db_id={db_session_id})")
+
+
+def clear_all_data() -> dict:
+    """Wipe all game data: truncate DB tables and delete S3 log objects."""
+    result = {"db_cleared": False, "s3_deleted": 0}
+
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("TRUNCATE TABLE game_events, sessions RESTART IDENTITY CASCADE;")
+    conn.commit()
+    cur.close()
+    conn.close()
+    result["db_cleared"] = True
+
+    if s3:
+        for prefix in ("csv/", "logs/", "combined/"):
+            paginator = s3.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix):
+                keys = [{"Key": o["Key"]} for o in page.get("Contents", [])]
+                if keys:
+                    s3.delete_objects(Bucket=S3_BUCKET, Delete={"Objects": keys})
+                    result["s3_deleted"] += len(keys)
+
+    print(f"Admin clear: {result}")
+    return result
