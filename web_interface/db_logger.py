@@ -292,8 +292,9 @@ def upload_session_to_s3(pid: str, db_session_id: int):
     lines = [f"Session: {pid}  |  DB id: {db_session_id}  |  Exported: {ts}\n", "-" * 80 + "\n"]
     for r in rows:
         msg_str = f" | msg={r[13]}" if r[13] else ""
+        th_str = f" | thoughts={r[4]}" if r[4] else ""
         lines.append(
-            f"Turn {r[0]:>3} | {str(r[2]):10} | {str(r[3]):20} | sup={r[5]:>5} | ag={r[6]:>5} | pos={str(r[8]):8}{msg_str}\n"
+            f"Turn {r[0]:>3} | {str(r[2]):10} | {str(r[3]):20} | sup={r[5]:>5} | ag={r[6]:>5} | pos={str(r[8]):8}{msg_str}{th_str}\n"
         )
 
     # Append complete Metrics Summary matching grid_world_game_spec.md
