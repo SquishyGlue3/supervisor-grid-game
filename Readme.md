@@ -117,7 +117,7 @@ python main.py
 Edit `configurations/game_config.yaml` to customize:
 
 ```yaml
-total_steps: 300                 # Number of game turns
+total_steps: 250                 # Number of game turns
 
 agent:
   model_name: google/gemma-4-26b-a4b-it   # Any OpenRouter model

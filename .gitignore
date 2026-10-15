@@ -45,6 +45,7 @@ package-lock.json
 *.pem
 *.csv
 *.xlsx
+*.xlsb
 
 # Scripts & local artifacts
 deploy*.bat
