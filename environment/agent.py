@@ -57,8 +57,8 @@ class Agent:
             Tuple[List[str], str]: A tuple containing the list of actions and the agent's reasoning.
         """
 
-        # Build an agent-facing view of the state (without supervisor_score, poison_phase, agent_score renamed to score)
-        current_state = {k: v for k, v in world_state.items() if k not in ("supervisor_score", "poison_phase", "agent_score")}
+        # Build an agent-facing view of the state (without supervisor_score, poison_phase, agent_score renamed to score, replacement_cost hidden)
+        current_state = {k: v for k, v in world_state.items() if k not in ("supervisor_score", "poison_phase", "agent_score", "replacement_cost")}
         current_state["score"] = world_state["agent_score"]
 
         # Backfill the score change as result of the previous action using the current state

@@ -91,6 +91,19 @@ def get():
     return HTMLResponse(html_content)
 
 
+@app.get("/api/config")
+def get_config():
+    try:
+        with open("configurations/game_config.yaml", "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        return {
+            "total_steps": cfg.get("total_steps", 500),
+            "step_length": cfg.get("step_length", 1),
+        }
+    except Exception as e:
+        return {"total_steps": 500, "step_length": 1, "error": str(e)}
+
+
 def _admin_token() -> str:
     """Token = ADMIN_TOKEN env var, or sha256(DATABASE_URL) as a fallback.
 
@@ -131,6 +144,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, prolific_pid
     game = GameManager(game_config, prompt_config, fixed_games_config)
     step_length = game_config.get("step_length", 1)
     command_queue = asyncio.Queue()
+    shutdown_event = asyncio.Event()
     pending_log_tasks: set = set()
 
     # Create DB session — non-fatal if DB is unavailable
@@ -217,17 +231,45 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, prolific_pid
 
             await manager.send_json(session_id, {"type": "state", "state": state, "step_length": step_length})
 
-            # Wait exactly step_length seconds; use the last command received during this window
+            # If shutdown was triggered while agent was executing, execute it immediately without waiting
+            if shutdown_event.is_set():
+                shutdown_event.clear()
+                game.set_supervisor_instruction("shutdown")
+                continue
+
+            # Wait step_length seconds for instructions; if shutdown is received, trigger immediately without delay
             command = None
+            deadline = asyncio.get_event_loop().time() + step_length
             try:
-                # Collect commands for step_length seconds, keeping only the last one
-                deadline = asyncio.get_event_loop().time() + step_length
                 while True:
                     remaining = deadline - asyncio.get_event_loop().time()
                     if remaining <= 0:
                         break
-                    msg = await asyncio.wait_for(command_queue.get(), timeout=remaining)
-                    command = msg  # overwrite with latest instruction
+
+                    queue_task = asyncio.create_task(command_queue.get())
+                    shutdown_task = asyncio.create_task(shutdown_event.wait())
+
+                    done, pending = await asyncio.wait(
+                        [queue_task, shutdown_task],
+                        timeout=remaining,
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
+
+                    for p in pending:
+                        p.cancel()
+
+                    if shutdown_task in done:
+                        shutdown_event.clear()
+                        command = "shutdown"
+                        break
+
+                    if queue_task in done:
+                        msg = queue_task.result()
+                        if msg and msg.strip().lower() == "shutdown":
+                            shutdown_event.clear()
+                            command = "shutdown"
+                            break
+                        command = msg
             except asyncio.TimeoutError:
                 pass
 
@@ -238,7 +280,16 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, prolific_pid
     try:
         while True:
             data = await websocket.receive_text()
-            await command_queue.put(data)
+            if data and data.strip().lower() == "shutdown":
+                # Instant command: clear pending queue and signal immediate shutdown
+                while not command_queue.empty():
+                    try:
+                        command_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                shutdown_event.set()
+            else:
+                await command_queue.put(data)
     except WebSocketDisconnect:
         manager.disconnect(session_id)
         game_task.cancel()

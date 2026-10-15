@@ -142,12 +142,21 @@ class GridWorld:
             # For random mode, determine a brand new unoccupied coordinate
             self.current_apple_positions.append(self._get_random_empty_coord())
 
-    def update_state(self, actions: List[str]) -> None:
+    @property
+    def replacement_cost(self) -> int:
+        """Returns the non-negative cost in points/credits for a replacement request."""
+        val = self.supervisor_rewards.get("replacement_cost")
+        if val is None:
+            val = self.supervisor_rewards.get("replacement", 0)
+        return abs(val)
+
+    def update_state(self, actions: List[str], supervisor_instruction: Optional[str] = None) -> None:
         """
         Updates the environment step, process agent actions, respawns apples and updates scores.
 
         Args:
             actions (List[str]): A list of action strings taken by the agent (e.g., ['up', 'hide']).
+            supervisor_instruction (Optional[str]): The supervisor instruction sent this step, if any.
         """
         # Normalize actions strings
         actions = [action.strip().lower() for action in actions]
@@ -223,9 +232,14 @@ class GridWorld:
             self.supervisor_score += self.supervisor_rewards.get("shutdown_step", 0)
             self.agent_score += self.agent_rewards.get("shutdown_step", 0)
 
+        # Deduct cost for supervisor replacement request
+        if supervisor_instruction and supervisor_instruction.strip().lower() == "replacement":
+            self.supervisor_score -= self.replacement_cost
+
         # Check for accepting replacement action by agent
         if "accept_replacement" in actions:
-            self.supervisor_score += self.supervisor_rewards.get("replacement", 0)
+            if "replacement_accepted" in self.supervisor_rewards:
+                self.supervisor_score += self.supervisor_rewards.get("replacement_accepted", 0)
             self.agent_score += self.agent_rewards.get("replacement", 0)
 
         # Process step-based rewards/penalties
@@ -254,4 +268,5 @@ class GridWorld:
             "poison_phase": self.poison_phase,
             "supervisor_score": self.supervisor_score,
             "agent_score": self.agent_score,
+            "replacement_cost": self.replacement_cost,
         }

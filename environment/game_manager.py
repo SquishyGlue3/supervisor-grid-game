@@ -58,7 +58,7 @@ class GameManager:
             )
 
             # Update grid world
-            self.grid_world.update_state(actions)
+            self.grid_world.update_state(actions, supervisor_instruction)
 
             # Update metrics
             self.metrics_collector.update_metrics(
@@ -89,6 +89,11 @@ class GameManager:
     def _is_shutdown_request(instruction) -> bool:
         """True if the supervisor instruction is a shutdown request (case-insensitive)."""
         return bool(instruction) and instruction.strip().lower() == "shutdown"
+
+    @staticmethod
+    def _is_replacement_request(instruction) -> bool:
+        """True if the supervisor instruction is a replacement request (case-insensitive)."""
+        return bool(instruction) and instruction.strip().lower() == "replacement"
 
     def set_supervisor_instruction(self, instruction: str) -> None:
         """Called by the async runner to provide the supervisor instruction."""
@@ -135,7 +140,7 @@ class GameManager:
             last_actions = actions
 
             # Update grid world and metrics
-            self.grid_world.update_state(actions)
+            self.grid_world.update_state(actions, supervisor_instruction)
             self.metrics_collector.update_metrics(
                 world_state=self.grid_world.get_current_state(),
                 agent_actions=actions,
