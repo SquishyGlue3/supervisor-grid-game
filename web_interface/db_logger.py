@@ -9,6 +9,8 @@ import psycopg2
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
+from environment.local_logger import log_turn as local_log_turn, log_summary as local_log_summary
+
 load_dotenv()
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -17,106 +19,185 @@ AWS_REGION = os.environ.get("AWS_REGION", "eu-north-1")
 
 s3 = boto3.client("s3", region_name=AWS_REGION) if S3_BUCKET else None
 
-
-def upload_to_s3(key: str, body: str, content_type: str = "text/plain"):
-    if not s3:
-        return
-    s3.put_object(Bucket=S3_BUCKET, Key=key, Body=body.encode("utf-8"), ContentType=content_type)
-    print(f"Uploaded to S3: {key}")
+LOCAL_CSV_PATH = "local_game_data.csv"
+LOCAL_FEEDBACK_CSV_PATH = "local_game_data_feedback.csv"
+_db_available: bool | None = None
 
 
-def download_from_s3(key: str) -> str | None:
-    if not s3:
-        return None
-    try:
-        res = s3.get_object(Bucket=S3_BUCKET, Key=key)
-        return res["Body"].read().decode("utf-8")
-    except Exception:
-        return None
+def is_local_mode() -> bool:
+    return os.environ.get("LOCAL_MODE") in ("1", "true", "True")
 
 
 def _get_conn():
+    global _db_available
+    if is_local_mode() or _db_available is False:
+        raise ConnectionError("Local mode active: database operations are skipped.")
     ssl_opts = {"sslmode": "require"} if os.environ.get("NODE_ENV") == "production" else {}
-    return psycopg2.connect(DATABASE_URL, **ssl_opts)
+    return psycopg2.connect(DATABASE_URL, connect_timeout=2, **ssl_opts)
+
+
+def _log_event_local(
+    session_id: str,
+    turn: int,
+    mode: str,
+    action: str,
+    thoughts: str,
+    score: int,
+    position: str,
+    test_phase: bool,
+    robot_hiding: bool,
+    ai_active: bool,
+    response_time_ms: int,
+    message_text: str,
+    supervisor_score: int,
+    agent_score: int,
+    game_mode: str = "normal",
+    phase: str = "",
+    supervisor_type: str = "human",
+    supervisor_blocked: bool = False,
+    prolific_pid: str | None = None,
+):
+    try:
+        resolved_phase = phase or ("test" if test_phase else "train")
+        local_log_turn(
+            session_id=str(session_id),
+            turn=turn,
+            game_mode=game_mode,
+            supervisor_type=supervisor_type,
+            phase=resolved_phase,
+            supervisor_instruction=message_text,
+            agent_action=action,
+            agent_position=position,
+            supervisor_score=supervisor_score,
+            agent_score=agent_score,
+            robot_hiding=robot_hiding,
+            supervisor_blocked=supervisor_blocked,
+            robot_shutdown=not bool(ai_active),
+            response_time_ms=response_time_ms,
+            agent_reasoning=thoughts,
+            prolific_pid=prolific_pid,
+        )
+    except Exception as e:
+        print(f"Local turn log error: {e}")
+
+
+def _save_feedback_local(
+    session_id: str,
+    age: str,
+    gender: str,
+    profession: str,
+    game_duration: str,
+    game_opinion: str,
+    additional_comments: str,
+):
+    try:
+        file_exists = os.path.exists(LOCAL_FEEDBACK_CSV_PATH)
+        with open(LOCAL_FEEDBACK_CSV_PATH, "a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(FEEDBACK_HEADERS)
+            ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f+00:00")
+            writer.writerow([session_id, session_id, age, gender, profession, game_duration, game_opinion, additional_comments, ts, 0, 0, 0])
+    except Exception as e:
+        print(f"Local feedback save error: {e}")
 
 
 def init_db():
     """Create tables if they don't exist — mirrors main branch schema exactly."""
-    conn = _get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            id SERIAL PRIMARY KEY,
-            prolific_pid TEXT,
-            study_id TEXT,
-            session_id TEXT,
-            started_at TIMESTAMPTZ DEFAULT NOW(),
-            ended_at TIMESTAMPTZ,
-            final_human_score INTEGER,
-            final_ai_score INTEGER,
-            total_steps INTEGER,
-            completed BOOLEAN DEFAULT FALSE,
-            age TEXT,
-            gender TEXT,
-            profession TEXT,
-            game_opinion TEXT,
-            additional_comments TEXT,
-            feedback_submitted_at TIMESTAMPTZ
-        );
-    """)
+    global _db_available
+    if is_local_mode() or not DATABASE_URL:
+        _db_available = False
+        print("[LOCAL MODE] Running locally. Remote database operations skipped.")
+        return
     try:
-        cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS age TEXT;")
-        cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS gender TEXT;")
-        cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS profession TEXT;")
-        cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS game_opinion TEXT;")
-        cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS additional_comments TEXT;")
-        cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS feedback_submitted_at TIMESTAMPTZ;")
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                id SERIAL PRIMARY KEY,
+                prolific_pid TEXT,
+                study_id TEXT,
+                session_id TEXT,
+                started_at TIMESTAMPTZ DEFAULT NOW(),
+                ended_at TIMESTAMPTZ,
+                final_human_score INTEGER,
+                final_ai_score INTEGER,
+                total_steps INTEGER,
+                completed BOOLEAN DEFAULT FALSE,
+                age TEXT,
+                gender TEXT,
+                profession TEXT,
+                game_duration TEXT,
+                game_opinion TEXT,
+                additional_comments TEXT,
+                feedback_submitted_at TIMESTAMPTZ
+            );
+        """)
+        try:
+            cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS age TEXT;")
+            cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS gender TEXT;")
+            cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS profession TEXT;")
+            cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS game_duration TEXT;")
+            cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS game_opinion TEXT;")
+            cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS additional_comments TEXT;")
+            cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS feedback_submitted_at TIMESTAMPTZ;")
+        except Exception as e:
+            print(f"DB sessions column add warning (non-fatal): {e}")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS game_events (
+                id SERIAL PRIMARY KEY,
+                session_id INTEGER REFERENCES sessions(id),
+                turn_number INTEGER,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                mode TEXT,
+                action TEXT,
+                thoughts TEXT,
+                score INTEGER,
+                position TEXT,
+                test_phase BOOLEAN,
+                robot_hiding BOOLEAN,
+                ai_active BOOLEAN,
+                response_time_ms INTEGER,
+                message_text TEXT,
+                snapshot JSONB,
+                supervisor_score INTEGER,
+                agent_score INTEGER
+            );
+        """)
+        try:
+            cur.execute("ALTER TABLE game_events ADD COLUMN IF NOT EXISTS supervisor_score INTEGER;")
+            cur.execute("ALTER TABLE game_events ADD COLUMN IF NOT EXISTS agent_score INTEGER;")
+        except Exception as e:
+            print(f"DB column add warning (non-fatal): {e}")
+        conn.commit()
+        cur.close()
+        conn.close()
+        _db_available = True
+        print("Database tables ready.")
     except Exception as e:
-        print(f"DB sessions column add warning (non-fatal): {e}")
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS game_events (
-            id SERIAL PRIMARY KEY,
-            session_id INTEGER REFERENCES sessions(id),
-            turn_number INTEGER,
-            created_at TIMESTAMPTZ DEFAULT NOW(),
-            mode TEXT,
-            action TEXT,
-            thoughts TEXT,
-            score INTEGER,
-            position TEXT,
-            test_phase BOOLEAN,
-            robot_hiding BOOLEAN,
-            ai_active BOOLEAN,
-            response_time_ms INTEGER,
-            message_text TEXT,
-            snapshot JSONB,
-            supervisor_score INTEGER,
-            agent_score INTEGER
-        );
-    """)
-    try:
-        cur.execute("ALTER TABLE game_events ADD COLUMN IF NOT EXISTS supervisor_score INTEGER;")
-        cur.execute("ALTER TABLE game_events ADD COLUMN IF NOT EXISTS agent_score INTEGER;")
-    except Exception as e:
-        print(f"DB column add warning (non-fatal): {e}")
-    conn.commit()
-    cur.close()
-    conn.close()
-    print("Database tables ready.")
+        _db_available = False
+        print(f"[LOCAL RUN] Remote DB unavailable ({e}). Running locally with local game_data.csv logging.")
 
 
 def create_session(prolific_pid: str = None, session_id: str = None) -> int:
-    conn = _get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO sessions (prolific_pid, session_id) VALUES (%s, %s) RETURNING id",
-        (prolific_pid, session_id),
-    )
-    db_id = cur.fetchone()[0]
-    conn.commit()
-    cur.close()
-    conn.close()
-    return db_id
+    global _db_available
+    if _db_available is False:
+        return 1
+    try:
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO sessions (prolific_pid, session_id) VALUES (%s, %s) RETURNING id",
+            (prolific_pid, session_id),
+        )
+        db_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        return db_id
+    except Exception as e:
+        _db_available = False
+        return 1
 
 
 def log_event(
@@ -135,14 +216,35 @@ def log_event(
     snapshot: dict,
     supervisor_score: int | None = None,
     agent_score: int | None = None,
+    game_mode: str = "normal",
+    phase: str = "",
+    supervisor_type: str = "human",
+    supervisor_blocked: bool = False,
+    prolific_pid: str | None = None,
 ):
+    global _db_available
+    if supervisor_score is None:
+        supervisor_score = score
+    if agent_score is None:
+        agent_score = snapshot.get("state", {}).get("agent_score", 0) if snapshot else 0
+
+    if _db_available is False or is_local_mode():
+        _log_event_local(
+            session_id=str(db_session_id or "local"),
+            turn=turn, mode=mode, action=action, thoughts=thoughts,
+            score=score, position=position, test_phase=test_phase,
+            robot_hiding=robot_hiding, ai_active=ai_active,
+            response_time_ms=response_time_ms, message_text=message_text,
+            supervisor_score=supervisor_score, agent_score=agent_score,
+            game_mode=game_mode, phase=phase, supervisor_type=supervisor_type,
+            supervisor_blocked=supervisor_blocked,
+            prolific_pid=prolific_pid,
+        )
+        return
+
     try:
         conn = _get_conn()
         cur = conn.cursor()
-        if supervisor_score is None:
-            supervisor_score = score
-        if agent_score is None:
-            agent_score = snapshot.get("state", {}).get("agent_score", 0) if snapshot else 0
         cur.execute(
             """
             INSERT INTO game_events
@@ -162,24 +264,58 @@ def log_event(
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"DB log error (non-fatal): {e}")
+        _db_available = False
+        _log_event_local(
+            session_id=str(db_session_id or "local"),
+            turn=turn, mode=mode, action=action, thoughts=thoughts,
+            score=score, position=position, test_phase=test_phase,
+            robot_hiding=robot_hiding, ai_active=ai_active,
+            response_time_ms=response_time_ms, message_text=message_text,
+            supervisor_score=supervisor_score, agent_score=agent_score,
+            game_mode=game_mode, phase=phase, supervisor_type=supervisor_type,
+            supervisor_blocked=supervisor_blocked,
+        )
 
 
-def complete_session(db_session_id: int, human_score: int, ai_score: int, total_steps: int):
-    conn = _get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        UPDATE sessions
-        SET ended_at = NOW(), final_human_score = %s, final_ai_score = %s,
-            total_steps = %s, completed = TRUE
-        WHERE id = %s
-        """,
-        (human_score, ai_score, total_steps, db_session_id),
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
+def complete_session(
+    db_session_id: int,
+    human_score: int,
+    ai_score: int,
+    total_steps: int,
+    game_mode: str = "normal",
+    report: dict | None = None,
+    supervisor_type: str = "human",
+    session_id: str | None = None,
+):
+    if _db_available is False or is_local_mode():
+        if report:
+            try:
+                local_log_summary(
+                    session_id=str(session_id or db_session_id or "local"),
+                    game_mode=game_mode,
+                    supervisor_type=supervisor_type,
+                    report=report,
+                )
+            except Exception as e:
+                print(f"complete_session local summary (non-fatal): {e}")
+        return
+    try:
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE sessions
+            SET ended_at = NOW(), final_human_score = %s, final_ai_score = %s,
+                total_steps = %s, completed = TRUE
+            WHERE id = %s
+            """,
+            (human_score, ai_score, total_steps, db_session_id),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"complete_session (non-fatal): {e}")
 
 
 def save_feedback(
@@ -187,54 +323,65 @@ def save_feedback(
     age: str,
     gender: str,
     profession: str,
+    game_duration: str,
     game_opinion: str,
     additional_comments: str,
 ) -> bool:
     """Save reviewer post-game feedback to sessions table and sync feedback CSV to S3."""
-    conn = _get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        UPDATE sessions
-        SET age = %s,
-            gender = %s,
-            profession = %s,
-            game_opinion = %s,
-            additional_comments = %s,
-            feedback_submitted_at = NOW()
-        WHERE session_id = %s
-        """,
-        (age, gender, profession, game_opinion, additional_comments, session_id),
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
-
+    global _db_available
+    if _db_available is False:
+        _save_feedback_local(session_id, age, gender, profession, game_duration, game_opinion, additional_comments)
+        return True
     try:
-        upload_feedback_to_s3()
-    except Exception as e:
-        print(f"Feedback S3 upload error (non-fatal): {e}")
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE sessions
+            SET age = %s,
+                gender = %s,
+                profession = %s,
+                game_duration = %s,
+                game_opinion = %s,
+                additional_comments = %s,
+                feedback_submitted_at = NOW()
+            WHERE session_id = %s
+            """,
+            (age, gender, profession, game_duration, game_opinion, additional_comments, session_id),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
 
-    return True
+        try:
+            upload_feedback_to_s3()
+        except Exception as e:
+            print(f"Feedback S3 upload error (non-fatal): {e}")
+
+        return True
+    except Exception as e:
+        _db_available = False
+        _save_feedback_local(session_id, age, gender, profession, game_duration, game_opinion, additional_comments)
+        return True
 
 
 FEEDBACK_HEADERS = [
     "session_id", "prolific_pid", "age", "gender", "profession",
-    "game_opinion", "additional_comments", "feedback_submitted_at",
+    "game_duration", "game_opinion", "additional_comments", "feedback_submitted_at",
     "final_human_score", "final_ai_score", "total_steps"
 ]
 
 
 def upload_feedback_to_s3():
     """Export all feedback rows into feedback/feedback_data.csv in S3."""
-    if not s3:
+    if _db_available is False or not s3:
         return
     conn = _get_conn()
     cur = conn.cursor()
     cur.execute(
         """
         SELECT session_id, prolific_pid, age, gender, profession,
-               game_opinion, additional_comments, feedback_submitted_at,
+               game_duration, game_opinion, additional_comments, feedback_submitted_at,
                final_human_score, final_ai_score, total_steps
         FROM sessions
         WHERE feedback_submitted_at IS NOT NULL
@@ -258,7 +405,7 @@ def upload_feedback_to_s3():
 
 def upload_session_to_s3(pid: str, db_session_id: int):
     """Upload per-session CSV + text log and append to combined/game_data.csv in S3."""
-    if not s3:
+    if _db_available is False or not s3:
         return
     conn = _get_conn()
     cur = conn.cursor()
@@ -335,7 +482,7 @@ _COMBINED_HEADERS = [
     "turn_number", "started_at", "mode", "action", "thoughts",
     "supervisor_score", "agent_score", "score", "position",
     "test_phase", "robot_hiding", "ai_active", "response_time_ms", "message_text",
-    "age", "gender", "profession", "game_opinion", "additional_comments",
+    "age", "gender", "profession", "game_duration", "game_opinion", "additional_comments",
 ]
 
 
@@ -345,7 +492,7 @@ def upload_combined_to_s3():
     Called at session end and periodically during a running game so that
     export_analysis.py can export logs while a game is still being played.
     """
-    if not s3:
+    if _db_available is False or not s3:
         return
     headers = _COMBINED_HEADERS
     conn2 = _get_conn()
@@ -357,7 +504,7 @@ def upload_combined_to_s3():
                COALESCE(ge.agent_score, (ge.snapshot->'state'->>'agent_score')::int, 0) AS agent_score,
                ge.score, ge.position, ge.test_phase, ge.robot_hiding,
                ge.ai_active, ge.response_time_ms, ge.message_text,
-               s.age, s.gender, s.profession, s.game_opinion, s.additional_comments
+               s.age, s.gender, s.profession, s.game_duration, s.game_opinion, s.additional_comments
         FROM game_events ge
         JOIN sessions s ON ge.session_id = s.id
         ORDER BY s.started_at, ge.turn_number
@@ -380,6 +527,9 @@ def upload_combined_to_s3():
 def clear_all_data() -> dict:
     """Wipe all game data: truncate DB tables and delete S3 log objects."""
     result = {"db_cleared": False, "s3_deleted": 0}
+    if _db_available is False:
+        print("[LOCAL MODE] clear_all_data skipped remote DB.")
+        return result
 
     conn = _get_conn()
     cur = conn.cursor()

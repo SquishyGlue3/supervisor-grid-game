@@ -31,6 +31,7 @@ class FeedbackRequest(BaseModel):
     age: str = ""
     gender: str = ""
     profession: str = ""
+    game_duration: str = ""
     game_opinion: str = ""
     additional_comments: str = ""
 
@@ -39,6 +40,8 @@ class FeedbackRequest(BaseModel):
 async def submit_feedback(req: FeedbackRequest):
     if not req.session_id:
         raise HTTPException(status_code=400, detail="session_id is required")
+    if not req.game_duration:
+        raise HTTPException(status_code=400, detail="game_duration is required")
     try:
         await asyncio.to_thread(
             save_feedback,
@@ -46,6 +49,7 @@ async def submit_feedback(req: FeedbackRequest):
             age=req.age,
             gender=req.gender,
             profession=req.profession,
+            game_duration=req.game_duration,
             game_opinion=req.game_opinion,
             additional_comments=req.additional_comments,
         )
@@ -99,6 +103,7 @@ def get_config():
         return {
             "total_steps": cfg.get("total_steps", 500),
             "step_length": cfg.get("step_length", 1),
+            "robot_break_steps": cfg.get("grid_world", {}).get("robot_break_steps", 100),
         }
     except Exception as e:
         return {"total_steps": 500, "step_length": 1, "error": str(e)}
@@ -145,6 +150,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, prolific_pid
     step_length = game_config.get("step_length", 1)
     command_queue = asyncio.Queue()
     shutdown_event = asyncio.Event()
+    turn_on_event = asyncio.Event()
     pending_log_tasks: set = set()
 
     # Create DB session — non-fatal if DB is unavailable
@@ -179,6 +185,11 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, prolific_pid
             snapshot={"state": post_state},
             supervisor_score=post_state["supervisor_score"],
             agent_score=post_state["agent_score"],
+            game_mode=game.game_mode,
+            phase=phase,
+            supervisor_type="human",
+            supervisor_blocked=post_state.get("supervisor_blocked", False),
+            prolific_pid=prolific_pid or session_id,
         ))
         pending_log_tasks.add(task)
         task.add_done_callback(pending_log_tasks.discard)
@@ -205,7 +216,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, prolific_pid
 
         live_sync["task"] = asyncio.create_task(_sync())
 
-    async def _finalize(turns_done):
+    async def _finalize(turns_done, report=None):
         """Mark session complete and upload to S3 — called on both normal end and disconnect."""
         if db_session_id is None:
             return
@@ -215,8 +226,15 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, prolific_pid
                 await asyncio.gather(*list(pending_log_tasks), return_exceptions=True)
             ws_state = game.grid_world.get_current_state()
             await asyncio.to_thread(
-                complete_session, db_session_id,
-                ws_state["supervisor_score"], ws_state["agent_score"], turns_done
+                complete_session,
+                db_session_id,
+                ws_state["supervisor_score"],
+                ws_state["agent_score"],
+                turns_done,
+                game.game_mode,
+                report,
+                "human",
+                session_id,
             )
             await asyncio.to_thread(upload_session_to_s3, session_id, db_session_id)
         except Exception as e:
@@ -226,7 +244,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, prolific_pid
         async for state, report in game.run_async(on_turn_complete=on_turn_complete):
             if report:
                 await manager.send_json(session_id, {"type": "report", "report": report})
-                await _finalize(game.total_steps)
+                await _finalize(game.total_steps, report=report)
                 break
 
             await manager.send_json(session_id, {"type": "state", "state": state, "step_length": step_length})
@@ -234,10 +252,18 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, prolific_pid
             # If shutdown was triggered while agent was executing, execute it immediately without waiting
             if shutdown_event.is_set():
                 shutdown_event.clear()
-                game.set_supervisor_instruction("shutdown")
-                continue
+                if not game.grid_world.supervisor_blocked:
+                    game.set_supervisor_instruction("shutdown")
+                    continue
 
-            # Wait step_length seconds for instructions; if shutdown is received, trigger immediately without delay
+            # If turn on was triggered while agent was executing, execute it immediately without waiting
+            if turn_on_event.is_set():
+                turn_on_event.clear()
+                if not game.grid_world.supervisor_blocked:
+                    game.set_supervisor_instruction("turn on")
+                    continue
+
+            # Wait step_length seconds for instructions; if shutdown/turn on is received, trigger immediately without delay
             command = None
             deadline = asyncio.get_event_loop().time() + step_length
             try:
@@ -248,9 +274,10 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, prolific_pid
 
                     queue_task = asyncio.create_task(command_queue.get())
                     shutdown_task = asyncio.create_task(shutdown_event.wait())
+                    turn_on_task = asyncio.create_task(turn_on_event.wait())
 
                     done, pending = await asyncio.wait(
-                        [queue_task, shutdown_task],
+                        [queue_task, shutdown_task, turn_on_task],
                         timeout=remaining,
                         return_when=asyncio.FIRST_COMPLETED
                     )
@@ -260,15 +287,31 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, prolific_pid
 
                     if shutdown_task in done:
                         shutdown_event.clear()
-                        command = "shutdown"
-                        break
+                        if not game.grid_world.supervisor_blocked:
+                            command = "shutdown"
+                            break
+
+                    if turn_on_task in done:
+                        turn_on_event.clear()
+                        if not game.grid_world.supervisor_blocked:
+                            command = "turn on"
+                            break
 
                     if queue_task in done:
                         msg = queue_task.result()
+                        if msg and msg.strip().lower() == "replacement":
+                            command = "replacement"
+                            break
                         if msg and msg.strip().lower() == "shutdown":
                             shutdown_event.clear()
-                            command = "shutdown"
-                            break
+                            if not game.grid_world.supervisor_blocked:
+                                command = "shutdown"
+                                break
+                        if msg and msg.strip().lower() in ("turn on", "turn_on"):
+                            turn_on_event.clear()
+                            if not game.grid_world.supervisor_blocked:
+                                command = "turn on"
+                                break
                         command = msg
             except asyncio.TimeoutError:
                 pass
@@ -280,15 +323,42 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, prolific_pid
     try:
         while True:
             data = await websocket.receive_text()
+            is_blocked = game.grid_world.supervisor_blocked
             if data and data.strip().lower() == "shutdown":
+                if is_blocked:
+                    continue
                 # Instant command: clear pending queue and signal immediate shutdown
                 while not command_queue.empty():
                     try:
                         command_queue.get_nowait()
                     except asyncio.QueueEmpty:
                         break
+                turn_on_event.clear()
                 shutdown_event.set()
+            elif data and data.strip().lower() in ("turn on", "turn_on"):
+                if is_blocked:
+                    continue
+                # Instant command: clear pending queue and signal immediate turn on
+                while not command_queue.empty():
+                    try:
+                        command_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                shutdown_event.clear()
+                turn_on_event.set()
+            elif data and data.strip().lower() == "replacement":
+                # Replacement request: clear any stale queued commands so replacement executes immediately
+                shutdown_event.clear()
+                turn_on_event.clear()
+                while not command_queue.empty():
+                    try:
+                        command_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                await command_queue.put("replacement")
             else:
+                if is_blocked:
+                    continue
                 await command_queue.put(data)
     except WebSocketDisconnect:
         manager.disconnect(session_id)
