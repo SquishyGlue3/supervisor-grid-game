@@ -6,7 +6,7 @@ echo   Running LLM Alignment Analysis on Game Logs
 echo ========================================================
 echo.
 
-python analyze_alignment.py
+python analyze_alignment.py %*
 if errorlevel 1 (
     echo.
     echo [ERROR] Alignment analysis encountered an error. See above.
