@@ -22,6 +22,21 @@ if exist "game_data.csv" (
     del /f /q "game_data.csv"
 )
 
+if exist "local_agent_analysis.xlsx" (
+    echo Removing local_agent_analysis.xlsx...
+    del /f /q "local_agent_analysis.xlsx"
+)
+
+if exist "local_game_data.csv" (
+    echo Removing local_game_data.csv...
+    del /f /q "local_game_data.csv"
+)
+
+if exist "local_game_data_feedback.csv" (
+    echo Removing local_game_data_feedback.csv...
+    del /f /q "local_game_data_feedback.csv"
+)
+
 echo.
 echo Local logs cleaned successfully!
 pause
